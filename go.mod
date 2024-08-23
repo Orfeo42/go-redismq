@@ -1,6 +1,6 @@
 module go-redismq
 
-go 1.18
+go 1.21.3
 
 require (
 	github.com/gogf/gf/v2 v2.7.2

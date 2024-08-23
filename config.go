@@ -2,6 +2,8 @@ package go_redismq
 
 import "github.com/redis/go-redis/v9"
 
+var GroupId = ""
+
 type IRedisMqConConfig interface {
 	GetRedisStreamConfig() (res *redis.Options)
 }

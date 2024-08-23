@@ -14,9 +14,9 @@ import (
 	"time"
 )
 
-const (
-	GroupId = "GID_UniBee_Recurring"
-)
+//const (
+//	GroupId = "GID_UniBee_Recurring"
+//)
 
 var consumerName = ""
 
