@@ -15,7 +15,7 @@ import (
 )
 
 //const (
-//	GroupId = "GID_UniBee_Recurring"
+//	Group = "GID_UniBee_Recurring"
 //)
 
 var consumerName = ""
@@ -91,7 +91,7 @@ func tryCreateGroup(queueName string, topic string) {
 			return
 		}
 	}()
-	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
+	client := redis.NewClient(GetRedisConfig())
 	// Defer Close
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -107,23 +107,23 @@ func tryCreateGroup(queueName string, topic string) {
 	// Sent Test Stream Message
 	_, err := client.XAdd(context.Background(), message.toStreamAddArgsValues(queueName)).Result()
 	if err != nil {
-		fmt.Printf("MQStream Setup Group Failure Or Group Exsit exception:%s queueName:%s group:%s\n", err, queueName, GroupId)
+		fmt.Printf("MQStream Setup Group Failure Or Group Exsit exception:%s queueName:%s group:%s\n", err, queueName, Group)
 	}
 	found := false
 	groups, _ := client.XInfoGroups(context.Background(), queueName).Result()
 	for _, group := range groups {
-		if group.Name == GroupId {
+		if group.Name == Group {
 			found = true
 		}
 	}
 	if !found {
 		// Try To Create Group
 		// Create Consumer Group
-		if err := client.XGroupCreateMkStream(context.Background(), queueName, GroupId, "$").Err(); err != nil {
-			fmt.Printf("MQStream GroupId exsit queueName:%s groupId:%s err:%s \n", queueName, GroupId, err.Error())
+		if err := client.XGroupCreateMkStream(context.Background(), queueName, Group, "$").Err(); err != nil {
+			fmt.Printf("MQStream Group exsit queueName:%s groupId:%s err:%s \n", queueName, Group, err.Error())
 			return
 		} else {
-			fmt.Printf("MQStream init queueName:%s groupId:%s \n", queueName, GroupId)
+			fmt.Printf("MQStream init queueName:%s groupId:%s \n", queueName, Group)
 		}
 	}
 }
@@ -135,7 +135,7 @@ func tryCreateConsumer(queueName string, topic string) {
 			return
 		}
 	}()
-	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
+	client := redis.NewClient(GetRedisConfig())
 	// Close
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -143,10 +143,10 @@ func tryCreateConsumer(queueName string, topic string) {
 			fmt.Printf("MQStream sendMessage error:%s\n", err.Error())
 		}
 	}(client)
-	if _, err := client.XGroupCreateConsumer(context.Background(), queueName, GroupId, consumerName).Result(); err != nil {
-		fmt.Printf("MQStream consumerName failure or consumerName exsit queueName:%s groupId:%s consumerName:%s err:%s\n", queueName, GroupId, consumerName, err.Error())
+	if _, err := client.XGroupCreateConsumer(context.Background(), queueName, Group, consumerName).Result(); err != nil {
+		fmt.Printf("MQStream consumerName failure or consumerName exsit queueName:%s groupId:%s consumerName:%s err:%s\n", queueName, Group, consumerName, err.Error())
 	} else {
-		fmt.Printf("MQStream init queueName:%s groupId:%s consumerName:%s\n", queueName, GroupId, consumerName)
+		fmt.Printf("MQStream init queueName:%s groupId:%s consumerName:%s\n", queueName, Group, consumerName)
 	}
 }
 
@@ -170,7 +170,7 @@ func blockConsumerTopic(topic string) {
 }
 
 func loopConsumer(topic string) {
-	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
+	client := redis.NewClient(GetRedisConfig())
 	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -332,7 +332,7 @@ func messageAck(message *Message) {
 	//} else {
 	//
 	//}
-	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
+	client := redis.NewClient(GetRedisConfig())
 	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -341,7 +341,7 @@ func messageAck(message *Message) {
 		}
 	}(client)
 	streamName := GetQueueName(message.Topic)
-	ackResult, err := client.XAck(context.Background(), streamName, GroupId, message.MessageId).Result()
+	ackResult, err := client.XAck(context.Background(), streamName, Group, message.MessageId).Result()
 	if err != nil {
 		fmt.Printf("MQStream ack message:%v panic error:%s\n", message, err)
 		return
@@ -367,7 +367,7 @@ func blockReceiveConsumerMessage(client *redis.Client, topic string) *Message {
 	streamName := GetQueueName(topic)
 	//fmt.Printf("MQStream XReadGroup blockReceiveConsumerMessage streamName=%s\n", streamName)
 	result, err := client.XReadGroup(ctx, &redis.XReadGroupArgs{
-		Group:    GroupId,
+		Group:    Group,
 		Consumer: consumerName,
 		Streams:  []string{streamName, ">"},
 		Count:    1,
@@ -404,7 +404,7 @@ func pushTaskToResumeLater(consumer IMessageListener, message *Message) bool {
 }
 
 func putMessageToDeathQueue(topic string, id string, message *Message) bool {
-	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
+	client := redis.NewClient(GetRedisConfig())
 	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -422,7 +422,7 @@ func putMessageToDeathQueue(topic string, id string, message *Message) bool {
 }
 
 func putMessageToTransactionDeathQueue(topic string, message *Message) bool {
-	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
+	client := redis.NewClient(GetRedisConfig())
 	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -447,7 +447,7 @@ func putMessageToTransactionDeathQueue(topic string, message *Message) bool {
 }
 
 func fetchTransactionPrepareMessagesForChecker(topic string) []*Message {
-	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
+	client := redis.NewClient(GetRedisConfig())
 	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -481,7 +481,7 @@ func fetchTransactionPrepareMessagesForChecker(topic string) []*Message {
 func startScheduleTrimStream() {
 	var maxLen = 10000
 	go func() {
-		client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
+		client := redis.NewClient(GetRedisConfig())
 		// Close Conn
 		defer func(client *redis.Client) {
 			err := client.Close()
@@ -499,17 +499,17 @@ func startScheduleTrimStream() {
 			for _, topic := range Topics {
 				queueName := GetQueueName(topic)
 				client.XTrimMaxLen(context.Background(), queueName, int64(maxLen))
-				fmt.Printf("MQStream STREAM Cut maxLen:%d queueName:%s group:%s consumerName:%s\n", maxLen, queueName, GroupId, consumerName)
+				fmt.Printf("MQStream STREAM Cut maxLen:%d queueName:%s group:%s consumerName:%s\n", maxLen, queueName, Group, consumerName)
 				consumersCheck(queueName)
 				queueName = getBackupQueueName(topic)
 				client.XTrimMaxLen(context.Background(), queueName, int64(maxLen))
-				fmt.Printf("MQStream STREAM Cut maxLen:%d queueName:%s group:%s consumerName:%s\n", maxLen, queueName, GroupId, consumerName)
+				fmt.Printf("MQStream STREAM Cut maxLen:%d queueName:%s group:%s consumerName:%s\n", maxLen, queueName, Group, consumerName)
 				consumersCheck(queueName)
 			}
 
 			queueName := GetDeathQueueName()
 			client.XTrimMaxLen(context.Background(), queueName, int64(maxLen))
-			fmt.Printf("MQStream Cut maxLen:%d queueName:%s group:%s consumerName:%s\n", maxLen, queueName, GroupId, consumerName)
+			fmt.Printf("MQStream Cut maxLen:%d queueName:%s group:%s consumerName:%s\n", maxLen, queueName, Group, consumerName)
 			consumersCheck(queueName)
 
 			time.Sleep(1000 * 60 * 10 * time.Second) //10分钟修剪一次
