@@ -1,4 +1,4 @@
-package redismq
+package go_redismq
 
 import (
 	"context"

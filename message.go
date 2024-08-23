@@ -1,11 +1,10 @@
-package redismq
+package go_redismq
 
 import (
 	"fmt"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/redis/go-redis/v9"
 	"strings"
-	"unibee/utility"
 )
 
 type Message struct {
@@ -35,7 +34,7 @@ func NewRedisMQMessage(topicWrappper MQTopicEnum, body string) *Message {
 		Topic:    topicWrappper.Topic,
 		Tag:      topicWrappper.Tag,
 		Body:     body,
-		SendTime: utility.CurrentTimeMillis(),
+		SendTime: CurrentTimeMillis(),
 	}
 }
 
@@ -73,7 +72,7 @@ func (message *Message) toStreamAddArgsValues(stream string) *redis.XAddArgs {
 		ReconsumeTimes:   message.ReconsumeTimes,
 		CustomData:       message.CustomData,
 		Key:              message.Key,
-		SendTime:         utility.CurrentTimeMillis(),
+		SendTime:         CurrentTimeMillis(),
 	}
 	metajson, _ := gjson.Marshal(metadata)
 	var values = map[string]interface{}{

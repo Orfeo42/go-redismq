@@ -1,4 +1,4 @@
-package redismq
+package go_redismq
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 	"net"
 	"strings"
 	"time"
-	"unibee/utility"
 )
 
 const (
@@ -229,14 +228,14 @@ func loopTransactionChecker(topic string) {
 					_, _ = rollbackTransactionPrepareMessage(message)
 				} else {
 					//todo mark save send time，max retry times limit 50
-					if (utility.CurrentTimeMillis() - message.SendTime) > 1000*60*60*8 {
+					if (CurrentTimeMillis() - message.SendTime) > 1000*60*60*8 {
 						//After 8 Hours，Transaction Message Drop To Death
 						putMessageToTransactionDeathQueue(topic, message)
 					}
 				}
 			} else {
 				// todo mark 检查优化处理没有checker 的情况，超过一定时间删除半消息
-				if (utility.CurrentTimeMillis() - message.SendTime) > 1000*60*60*24*7 {
+				if (CurrentTimeMillis() - message.SendTime) > 1000*60*60*24*7 {
 					//After 7 Days，Transaction Rollback
 					_, _ = rollbackTransactionPrepareMessage(message)
 				}
@@ -272,11 +271,11 @@ func runConsumeMessage(consumer IMessageListener, message *Message) {
 		fmt.Printf("RedisMQ_Receive Stream Message Exception Group Receive Boardcast，Drop messageKey:%s messageId:%v\n", GetMessageKey(message.Topic, message.Tag), message.MessageId)
 		return
 	}
-	cost := utility.CurrentTimeMillis()
+	cost := CurrentTimeMillis()
 	if message.SendTime > 0 {
-		cost = utility.CurrentTimeMillis() - message.SendTime
+		cost = CurrentTimeMillis() - message.SendTime
 		// history no expire time
-		if (utility.CurrentTimeMillis() - message.SendTime) > 1000*60*60*24*3 {
+		if (CurrentTimeMillis() - message.SendTime) > 1000*60*60*24*3 {
 			//message should expire after 3 days，drop
 			fmt.Printf("RedisMQ_Receive Stream Message Exception After 3 Days Drop Expired messageKey:%s messageId:%v\n ", GetMessageKey(message.Topic, message.Tag), message.MessageId)
 			return
@@ -391,13 +390,6 @@ func blockReceiveConsumerMessage(client *redis.Client, topic string) *Message {
 	return nil
 }
 
-func MaxInt(a int, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func pushTaskToResumeLater(consumer IMessageListener, message *Message) bool {
 	ResumeTimesMax := MaxInt(40, message.ReconsumeMax)
 	fmt.Printf("RedisMq_pushTaskToResumeLater messageId:%s, topic:%s tag:%s ResumeTimesMax:%v/%v \n", message.MessageId, message.Topic, message.Tag, message.ReconsumeTimes, ResumeTimesMax)
@@ -405,7 +397,7 @@ func pushTaskToResumeLater(consumer IMessageListener, message *Message) bool {
 		return putMessageToDeathQueue(message.Topic, message.MessageId, message)
 	} else {
 		message.ReconsumeTimes = message.ReconsumeTimes + 1
-		var appendTime = utility.MaxInt64(60, int64(60*message.ReconsumeTimes))
+		var appendTime = MaxInt64(60, int64(60*message.ReconsumeTimes))
 		message.StartDeliverTime = gtime.Now().Timestamp() + appendTime // resume every min till end
 		return sendDelayMessage(message)
 	}

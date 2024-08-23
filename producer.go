@@ -1,4 +1,4 @@
-package redismq
+package go_redismq
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/redis/go-redis/v9"
 	"strings"
-	"unibee/utility"
 )
 
 func Send(message *Message) (bool, error) {
@@ -45,7 +44,7 @@ func SendTransaction(message *Message, transactionExecuter func(messageToSend *M
 }
 
 func sendDelayMessage(message *Message) bool {
-	utility.Assert(message.StartDeliverTime-gtime.Now().Timestamp() > 0, "StartDeliverTime Invalid, should > now")
+	Assert(message.StartDeliverTime-gtime.Now().Timestamp() > 0, "StartDeliverTime Invalid, should > now")
 	send, err := SendDelay(message, message.StartDeliverTime-gtime.Now().Timestamp())
 	fmt.Printf("Redismq SendDelayMessage result:%v", send)
 	if err != nil {
@@ -59,8 +58,8 @@ func sendMessage(message *Message, source string) (bool, error) {
 		return false, errors.New("blank空消息")
 	}
 
-	message.SendTime = utility.CurrentTimeMillis()
-	utility.Assert(len(message.MessageId) == 0, "Send Stream Need Blank MessageId")
+	message.SendTime = CurrentTimeMillis()
+	Assert(len(message.MessageId) == 0, "Send Stream Need Blank MessageId")
 	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
 	// Close Conn
 	defer func(client *redis.Client) {
@@ -73,7 +72,7 @@ func sendMessage(message *Message, source string) (bool, error) {
 	// 发送消息到 Stream
 	streamMessageId, err := client.XAdd(context.Background(), message.toStreamAddArgsValues(GetQueueName(message.Topic))).Result()
 	if err != nil {
-		return false, errors.New(fmt.Sprintf("MQ STREAM Send MQStream exception:%s queueName=%s message:%v\n", err, GetQueueName(message.Topic), utility.MarshalToJsonString(message)))
+		return false, errors.New(fmt.Sprintf("MQ STREAM Send MQStream exception:%s queueName=%s message:%v\n", err, GetQueueName(message.Topic), MarshalToJsonString(message)))
 	}
 	message.MessageId = streamMessageId
 	fmt.Printf("MQ STREAM Send Stream Success, Source:%s QueueName=%s MessageId=%v\n", source, GetQueueName(message.Topic), message.MessageId)
@@ -85,7 +84,7 @@ func sendTransactionPrepareMessage(message *Message) (bool, error) {
 		return false, errors.New("Blank Message")
 	}
 	message.MessageId = GenerateUniqueNo(message.Topic)
-	message.SendTime = utility.CurrentTimeMillis()
+	message.SendTime = CurrentTimeMillis()
 	client := redis.NewClient(SharedConfig().GetRedisStreamConfig())
 	// Close Conn
 	defer func(client *redis.Client) {
