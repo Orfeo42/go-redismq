@@ -14,23 +14,20 @@ type RedisMqConfig struct {
 	Database int
 }
 
-type IRedisMqConConfig interface {
-	GetRedisStreamConfig() (res *RedisMqConfig)
-}
+//type IRedisMqConConfig interface {
+//	GetRedisStreamConfig() (res *RedisMqConfig)
+//}
 
-var instance IRedisMqConConfig
+//var instance IRedisMqConConfig
+//
+//func SharedConfig() IRedisMqConConfig {
+//	if instance == nil {
+//		panic("implement not found for interface IRedisMqConConfig, forgot register?")
+//	}
+//	return instance
+//}
 
-func SharedConfig() IRedisMqConConfig {
-	if instance == nil {
-		panic("implement not found for interface IRedisMqConConfig, forgot register?")
-	}
-	return instance
-}
-
-func RegisterRedisMqConfig(i IRedisMqConConfig) {
-	instance = i
-	Assert(instance != nil, "RegisterRedisMqConfig instance nil")
-	one := instance.GetRedisStreamConfig()
+func RegisterRedisMqConfig(one *RedisMqConfig) {
 	Assert(one != nil, "RegisterRedisMqConfig GetRedisStreamConfig nil")
 	Assert(len(one.Addr) > 0, "RegisterRedisMqConfig Addr is blank")
 	Assert(len(one.Group) > 0, "RegisterRedisMqConfig Group is blank")
