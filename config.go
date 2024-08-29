@@ -40,8 +40,8 @@ func RegisterRedisMqConfig(one *RedisMqConfig) {
 }
 
 func GetRedisConfig() *redis.Options {
-	if len(addr) == 0 || len(password) == 0 {
-		panic("Invalid redismq config, addr or password forgot setup?")
+	if len(addr) == 0 {
+		panic("Invalid redismq config, addr forgot setup?")
 	}
 	return &redis.Options{
 		Addr:     addr,
