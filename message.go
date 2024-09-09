@@ -114,7 +114,7 @@ func (message *Message) paseStreamMessage(value map[string]interface{}) {
 			message.ReconsumeMax = json.Get("reconsumeMax").Int()
 			message.StartDeliverTime = json.Get("startDeliverTime").Int64()
 			message.SendTime = json.Get("sendTime").Int64()
-			message.CustomData = json.Get("sendTime").Map()
+			message.CustomData = json.Get("customData").Map()
 			message.Key = json.Get("key").String()
 			message.getUniqueKey()
 		}
