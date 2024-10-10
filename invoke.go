@@ -48,7 +48,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	}
 	invokeId := fmt.Sprintf("%s%d", GenerateRandomAlphanumeric(6), CurrentTimeMillis())
 	req.MessageId = invokeId
-	// todo mark send reply faster than listen
+	// todo mark reply faster than listen
 	send, err := Send(&Message{
 		Topic: "internal",
 		Tag:   "invoke",
