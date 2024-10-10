@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gogf/gf/v2/frame/g"
 	"github.com/redis/go-redis/v9"
 	"time"
 )
@@ -24,7 +25,7 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 	defer func(pubSub *redis.PubSub) {
 		err := pubSub.Close()
 		if err != nil {
-			fmt.Println(err.Error())
+			g.Log().Errorf(ctx, "Error pubSub: %s\n", err.Error())
 		}
 	}(pubSub)
 
@@ -33,7 +34,7 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 		var res *InvoiceResponse
 		err := json.Unmarshal([]byte(msg.Payload), &res)
 		if err != nil {
-			fmt.Printf("Error deserializing response: %v\n", err)
+			g.Log().Errorf(ctx, "Error deserializing response: %s\n", err.Error())
 			return
 		}
 
@@ -78,7 +79,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	case <-ctx.Done():
 		return &InvoiceResponse{
 			Status:   false,
-			Response: "Timeout",
+			Response: "Invoke context timeout",
 		}
 	case response := <-responseChan:
 		return response
