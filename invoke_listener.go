@@ -8,19 +8,8 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/redis/go-redis/v9"
 	"runtime/debug"
+	"time"
 )
-
-type InvoiceRequest struct {
-	MessageId string `json:"messageId"`
-	Group     string `json:"group"`
-	Method    string `json:"method"`
-	Request   string `json:"request"`
-}
-
-type InvoiceResponse struct {
-	Status   bool   `json:"status"`
-	Response string `json:"response"`
-}
 
 type MessageInvokeListener struct {
 }
@@ -99,11 +88,13 @@ func getReplyChannel(req *InvoiceRequest) string {
 func init() {
 	RegisterListener(&MessageInvokeListener{})
 	fmt.Println("MessageInvokeListener RegisterListener")
+
 }
 
-var invokeMap = make(map[string]func(ctx context.Context, param string) (response string, err error))
+var groupKeepAlive = false
+var invokeMap = make(map[string]func(ctx context.Context, request interface{}) (response interface{}, err error))
 
-func RegisterInvoke(methodName string, op func(ctx context.Context, request string) (response string, err error)) {
+func RegisterInvoke(methodName string, op func(ctx context.Context, request interface{}) (response interface{}, err error)) {
 	if len(methodName) <= 0 || op == nil {
 		fmt.Printf("MQStream RegisterInvoke error methodName:%s or op:%p is nil\n", methodName, op)
 	} else if _, ok := invokeMap[methodName]; ok {
@@ -111,5 +102,33 @@ func RegisterInvoke(methodName string, op func(ctx context.Context, request stri
 	} else {
 		invokeMap[methodName] = op
 		fmt.Printf("MQStream RegisterInvoke methodName:%s for op:%p\n", methodName, op)
+	}
+	if !groupKeepAlive {
+		groupKeepAlive = true
+		client := redis.NewClient(GetRedisConfig())
+		// Close Conn
+		defer func(client *redis.Client) {
+			err := client.Close()
+			if err != nil {
+				fmt.Printf("MQStream Closs Redis Stream Client error:%s\n", err.Error())
+			}
+		}(client)
+		client.Set(context.Background(), fmt.Sprintf("MessageInvokeGroup:%s", Group), true, 300*time.Second)
+		go keepAlive(fmt.Sprintf("MessageInvokeGroup:%s", Group), 300*time.Second)
+	}
+}
+
+func keepAlive(key string, expireTime time.Duration) {
+	client := redis.NewClient(GetRedisConfig())
+	// Close Conn
+	defer func(client *redis.Client) {
+		err := client.Close()
+		if err != nil {
+			fmt.Printf("MQStream Closs Redis Stream Client error:%s\n", err.Error())
+		}
+	}(client)
+	for {
+		time.Sleep(60 * time.Second)
+		client.Expire(context.Background(), key, expireTime)
 	}
 }

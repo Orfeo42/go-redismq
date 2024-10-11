@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+type InvoiceRequest struct {
+	MessageId string      `json:"messageId"`
+	Group     string      `json:"group"`
+	Method    string      `json:"method"`
+	Request   interface{} `json:"request"`
+}
+
+type InvoiceResponse struct {
+	Status   bool        `json:"status"`
+	Response interface{} `json:"response"`
+}
+
 func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan chan *InvoiceResponse) {
 	//defer close(responseChan)
 
@@ -51,7 +63,33 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	}
 	invokeId := fmt.Sprintf("%s%d", GenerateRandomAlphanumeric(6), CurrentTimeMillis())
 	req.MessageId = invokeId
-	// todo mark reply faster than listen
+
+	//check group listener exist
+	client := redis.NewClient(GetRedisConfig())
+	// Close Conn
+	defer func(client *redis.Client) {
+		err := client.Close()
+		if err != nil {
+			fmt.Printf("MQStream Closs Redis Stream Client error:%s\n", err.Error())
+		}
+	}(client)
+	data, err := client.Get(ctx, fmt.Sprintf("MessageInvokeGroup:%s", req.Group)).Result()
+	if err != nil {
+		return &InvoiceResponse{
+			Status:   false,
+			Response: fmt.Sprintf("Invoke get group:%s", err.Error()),
+		}
+	}
+	if len(data) == 0 {
+		return &InvoiceResponse{
+			Status:   false,
+			Response: fmt.Sprintf("Invoke Group Not Found:%s", req.Group),
+		}
+	}
+
+	responseChan := make(chan *InvoiceResponse)
+	go listenForResponse(ctx, req, responseChan)
+
 	send, err := Send(&Message{
 		Topic: "internal",
 		Tag:   "invoke",
@@ -68,8 +106,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 			Response: fmt.Sprintf("Invoke send failed"),
 		}
 	}
-	responseChan := make(chan *InvoiceResponse)
-	go listenForResponse(ctx, req, responseChan)
+
 	go func() {
 		time.Sleep(time.Duration(timeoutSeconds) * time.Second)
 		select {

@@ -20,23 +20,23 @@ func TestMethodInvoke(t *testing.T) {
 	goredismq.RegisterListener(&TestListener{})
 	goredismq.StartRedisMqConsumer()
 	ctx := context.Background()
-	goredismq.RegisterInvoke("TestInvoke", func(ctx context.Context, request string) (response string, err error) {
+	goredismq.RegisterInvoke("TestInvoke", func(ctx context.Context, request interface{}) (response interface{}, err error) {
 		if request == "error" {
-			return "", errors.New("error")
+			return nil, errors.New("error")
 		} else if request == "panic" {
 			panic("panic")
 		} else if request == "timeout" {
 			time.Sleep(30 * time.Second)
-			return "", errors.New("timeout")
+			return nil, errors.New("timeout")
 		} else {
-			return fmt.Sprintf("%s:TestResponse", request), nil
+			return fmt.Sprintf("%s:TestResponse", goredismq.MarshalToJsonString(request)), nil
 		}
 	})
 	t.Run("Test Method Invoke", func(t *testing.T) {
 		res := goredismq.Invoke(ctx, &goredismq.InvoiceRequest{
 			Group:   TestGroup,
 			Method:  "TestInvoke",
-			Request: "",
+			Request: 1,
 		}, 0)
 		require.NotNil(t, res)
 		require.Equal(t, res.Status, true)
