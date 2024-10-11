@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gogf/gf/v2/frame/g"
+	"github.com/gogf/gf/v2/os/glog"
 	"github.com/redis/go-redis/v9"
 	"time"
 )
@@ -58,6 +59,7 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 }
 
 func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *InvoiceResponse {
+	startTime := time.Now()
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 15
 	}
@@ -120,11 +122,13 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	}()
 	select {
 	case <-ctx.Done():
+		glog.Infof(ctx, "RedisMQ:Measure:Invoke cost：%s \n", time.Now().Sub(startTime))
 		return &InvoiceResponse{
 			Status:   false,
 			Response: "Invoke context timeout",
 		}
 	case response := <-responseChan:
+		glog.Infof(ctx, "RedisMQ:Measure:Invoke cost：%s \n", time.Now().Sub(startTime))
 		return response
 	}
 }
