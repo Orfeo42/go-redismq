@@ -28,16 +28,16 @@ func (t TestListener) Consume(ctx context.Context, message *goredismq.Message) g
 	return goredismq.CommitMessage
 }
 
-func TestStartConfig(t *testing.T) {
+func TestProducerAndConsumer(t *testing.T) {
+	goredismq.RegisterRedisMqConfig(&goredismq.RedisMqConfig{
+		Group:    TestGroup,
+		Addr:     "127.0.0.1:6379",
+		Password: "",
+		Database: 0,
+	})
+	goredismq.RegisterListener(&TestListener{})
+	goredismq.StartRedisMqConsumer()
 	t.Run("Test Start RedisMQ", func(t *testing.T) {
-		goredismq.RegisterRedisMqConfig(&goredismq.RedisMqConfig{
-			Group:    "GID_RedisMQ_Test1",
-			Addr:     "127.0.0.1:6379",
-			Password: "",
-			Database: 0,
-		})
-		goredismq.RegisterListener(&TestListener{})
-		goredismq.StartRedisMqConsumer()
 		go func() {
 			for {
 				result, err := goredismq.Send(&goredismq.Message{

@@ -10,7 +10,7 @@ import (
 )
 
 func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan chan *InvoiceResponse) {
-	defer close(responseChan)
+	//defer close(responseChan)
 
 	client := redis.NewClient(GetRedisConfig())
 	// Close Conn
@@ -20,7 +20,8 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 			fmt.Printf("MQStream Closs Redis Stream Client error:%s\n", err.Error())
 		}
 	}(client)
-	replyChannel := fmt.Sprintf("%s_%s:%s", req.Group, req.Method, req.MessageId)
+	replyChannel := getReplyChannel(req)
+	g.Log().Debugf(ctx, "MethodInvoke waiting for replyChannel:%s", replyChannel)
 	pubSub := client.Subscribe(ctx, replyChannel)
 	defer func(pubSub *redis.PubSub) {
 		err := pubSub.Close()
@@ -37,10 +38,11 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 			g.Log().Errorf(ctx, "Error deserializing response: %s\n", err.Error())
 			return
 		}
-
+		g.Log().Debugf(ctx, "MethodInvoke get response:%s replyChannel:%s", MarshalToJsonString(res), replyChannel)
 		responseChan <- res
 		return
 	}
+	g.Log().Infof(ctx, "listenForResponse end")
 }
 
 func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *InvoiceResponse {
@@ -70,9 +72,13 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	go listenForResponse(ctx, req, responseChan)
 	go func() {
 		time.Sleep(time.Duration(timeoutSeconds) * time.Second)
-		responseChan <- &InvoiceResponse{
+		select {
+		case <-ctx.Done():
+			return
+		case responseChan <- &InvoiceResponse{
 			Status:   false,
 			Response: "Timeout",
+		}:
 		}
 	}()
 	select {
