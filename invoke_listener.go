@@ -91,7 +91,6 @@ func init() {
 
 }
 
-var groupKeepAlive = false
 var invokeMap = make(map[string]func(ctx context.Context, request interface{}) (response interface{}, err error))
 
 func RegisterInvoke(methodName string, op func(ctx context.Context, request interface{}) (response interface{}, err error)) {
@@ -103,32 +102,19 @@ func RegisterInvoke(methodName string, op func(ctx context.Context, request inte
 		invokeMap[methodName] = op
 		fmt.Printf("MQStream RegisterInvoke methodName:%s for op:%p\n", methodName, op)
 	}
-	if !groupKeepAlive {
-		groupKeepAlive = true
-		client := redis.NewClient(GetRedisConfig())
-		// Close Conn
-		defer func(client *redis.Client) {
-			err := client.Close()
-			if err != nil {
-				fmt.Printf("MQStream Closs Redis Stream Client error:%s\n", err.Error())
-			}
-		}(client)
-		client.Set(context.Background(), fmt.Sprintf("MessageInvokeGroup:%s", Group), true, 300*time.Second)
-		go keepAlive(fmt.Sprintf("MessageInvokeGroup:%s", Group), 300*time.Second)
-	}
 }
 
-func keepAlive(key string, expireTime time.Duration) {
+func keepAliveMessageInvokeListener() {
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
 			fmt.Printf("MQStream Closs Redis Stream Client error:%s\n", err.Error())
 		}
 	}(client)
+	client.Set(context.Background(), fmt.Sprintf("MessageInvokeGroup:%s", Group), true, 300*time.Second)
 	for {
 		time.Sleep(60 * time.Second)
-		client.Expire(context.Background(), key, expireTime)
+		client.Expire(context.Background(), fmt.Sprintf("MessageInvokeGroup:%s", Group), 300*time.Second)
 	}
 }

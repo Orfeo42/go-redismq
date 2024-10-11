@@ -39,6 +39,7 @@ func StartRedisMqConsumer() {
 		startScheduleTrimStream()
 		fmt.Println("MQStream Finish Queue Length Cut！！！！！！")
 	}()
+	go keepAliveMessageInvokeListener()
 }
 
 func innerSettingConsumerName() {
