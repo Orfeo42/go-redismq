@@ -72,10 +72,10 @@ func sendMessage(message *Message, source string) (bool, error) {
 	// 发送消息到 Stream
 	streamMessageId, err := client.XAdd(context.Background(), message.toStreamAddArgsValues(GetQueueName(message.Topic))).Result()
 	if err != nil {
-		return false, errors.New(fmt.Sprintf("MQ STREAM Send MQStream exception:%s queueName=%s message:%v\n", err, GetQueueName(message.Topic), MarshalToJsonString(message)))
+		return false, errors.New(fmt.Sprintf("RedisMQ_Send Stream Message exception:%s queueName=%s message:%v\n", err, GetQueueName(message.Topic), MarshalToJsonString(message)))
 	}
 	message.MessageId = streamMessageId
-	fmt.Printf("MQ STREAM Send Stream Success, Source:%s QueueName=%s MessageId=%v\n", source, GetQueueName(message.Topic), message.MessageId)
+	fmt.Printf("RedisMQ_Send Stream Message Success Source:%s QueueName=%s messageKey:%s MessageId=%v\n", source, GetQueueName(message.Topic), GetMessageKey(message.Topic, message.Tag), message.MessageId)
 	return true, nil
 }
 

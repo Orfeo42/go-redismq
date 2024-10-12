@@ -211,7 +211,7 @@ func loopTransactionChecker(topic string) {
 	for {
 		defer func() {
 			if exception := recover(); exception != nil {
-				fmt.Printf("Redismq Stream MQ Query Transaction Pre Redis Error loopTransactionChecker topic:%s panic error:%s\n", topic, exception)
+				fmt.Printf("RedisMQ_Query Stream Message Query Transaction Pre Redis Error loopTransactionChecker topic:%s panic error:%s\n", topic, exception)
 				return
 			}
 		}()
@@ -259,7 +259,7 @@ func runConsumeMessage(consumer IMessageListener, message *Message) {
 			} else {
 				err = gerror.NewCodef(gcode.CodeInternalPanic, "%+v", exception)
 			}
-			fmt.Printf("MQStream runConsumeMessage panic error:%s\n", err.Error())
+			fmt.Printf("RedisMQ Stream Message runConsumeMessage panic error:%s\n", err.Error())
 			return
 		}
 	}()
