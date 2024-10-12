@@ -29,10 +29,10 @@ type MessageMetaData struct {
 	SendTime         int64                  `json:"sendTime" dc:"SendTime"`
 }
 
-func NewRedisMQMessage(topicWrappper MQTopicEnum, body string) *Message {
+func NewRedisMQMessage(topicWrapper MQTopicEnum, body string) *Message {
 	return &Message{
-		Topic:    topicWrappper.Topic,
-		Tag:      topicWrappper.Tag,
+		Topic:    topicWrapper.Topic,
+		Tag:      topicWrapper.Tag,
 		Body:     body,
 		SendTime: CurrentTimeMillis(),
 	}
@@ -74,12 +74,12 @@ func (message *Message) toStreamAddArgsValues(stream string) *redis.XAddArgs {
 		Key:              message.Key,
 		SendTime:         CurrentTimeMillis(),
 	}
-	metajson, _ := gjson.Marshal(metadata)
+	metaJson, _ := gjson.Marshal(metadata)
 	var values = map[string]interface{}{
 		"topic":    message.Topic,
 		"tag":      message.Tag,
 		"body":     message.Body,
-		"metadata": string(metajson),
+		"metadata": string(metaJson),
 	}
 	return &redis.XAddArgs{
 		Stream: stream,
@@ -87,7 +87,7 @@ func (message *Message) toStreamAddArgsValues(stream string) *redis.XAddArgs {
 	}
 }
 
-func (message *Message) paseStreamMessage(value map[string]interface{}) {
+func (message *Message) passStreamMessage(value map[string]interface{}) {
 	if target, ok := value["topic"].(string); ok {
 		message.Topic = target
 	}
@@ -106,7 +106,7 @@ func (message *Message) paseStreamMessage(value map[string]interface{}) {
 		if err == nil {
 			defer func() {
 				if exception := recover(); exception != nil {
-					fmt.Printf("Redismq paseStreamMessage panic error:%s\n", exception)
+					fmt.Printf("Redismq passStreamMessage panic error:%s\n", exception)
 					return
 				}
 			}()

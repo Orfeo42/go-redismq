@@ -15,11 +15,11 @@ type MessageInvokeListener struct {
 }
 
 func (t MessageInvokeListener) GetTopic() string {
-	return "internal"
+	return TopicInternal
 }
 
 func (t MessageInvokeListener) GetTag() string {
-	return "invoke"
+	return TagInvoke
 }
 
 func (t MessageInvokeListener) Consume(ctx context.Context, message *Message) Action {

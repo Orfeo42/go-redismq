@@ -93,8 +93,8 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	go listenForResponse(ctx, req, responseChan)
 
 	send, err := Send(&Message{
-		Topic: "internal",
-		Tag:   "invoke",
+		Topic: TopicInternal,
+		Tag:   TagInvoke,
 		Body:  MarshalToJsonString(req),
 	})
 	if err != nil {
@@ -108,6 +108,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 			Response: fmt.Sprintf("Invoke send failed"),
 		}
 	}
+	glog.Infof(ctx, "RedisMQ:Measure:Invoke After Send Message cost：%s \n", time.Now().Sub(startTime))
 
 	go func() {
 		time.Sleep(time.Duration(timeoutSeconds) * time.Second)

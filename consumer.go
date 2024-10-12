@@ -14,10 +14,6 @@ import (
 	"time"
 )
 
-//const (
-//	Group = "GID_UniBee_Recurring"
-//)
-
 var consumerName = ""
 
 func StartRedisMqConsumer() {
@@ -51,20 +47,20 @@ func innerSettingConsumerName() {
 	}
 
 	// range interfaces
-	for _, iface := range interfaces {
-		// skip lo（loopback）
-		if iface.Flags&net.FlagLoopback == 0 {
+	for _, face := range interfaces {
+		// skip lo（loopBack）
+		if face.Flags&net.FlagLoopback == 0 {
 			// Get ALL Addr
-			addrs, err := iface.Addrs()
+			addrList, err := face.Addrs()
 			if err != nil {
 				fmt.Printf("Error:%s\n", err.Error())
 				continue
 			}
 
-			// range addr
-			for _, addr := range addrs {
+			// range one
+			for _, one := range addrList {
 				// change to IPV4
-				ip, _, err := net.ParseCIDR(addr.String())
+				ip, _, err := net.ParseCIDR(one.String())
 				if err != nil {
 					fmt.Printf("Error:%s\n", err.Error())
 					continue
@@ -298,7 +294,9 @@ func runConsumeMessage(consumer IMessageListener, message *Message) {
 				return
 			}
 		}()
-		time.Sleep(2 * time.Second)
+		if message.Topic != TopicInternal || message.Tag != TagInvoke {
+			time.Sleep(2 * time.Second)
+		}
 		action := consumer.Consume(ctx, message)
 		fmt.Printf("RedisMQ_Receive Stream Message Consume messageKey:%s result:%d messageId:%v cost:%dms\n", GetMessageKey(message.Topic, message.Tag), action, message.MessageId, cost)
 		if action == ReconsumeLater {
@@ -385,7 +383,7 @@ func blockReceiveConsumerMessage(client *redis.Client, topic string) *Message {
 		message := Message{}
 		message.MessageId = messageId
 		message.getUniqueKey()
-		message.paseStreamMessage(value)
+		message.passStreamMessage(value)
 		return &message
 	}
 	return nil
@@ -406,7 +404,6 @@ func pushTaskToResumeLater(consumer IMessageListener, message *Message) bool {
 
 func putMessageToDeathQueue(topic string, id string, message *Message) bool {
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
@@ -424,7 +421,6 @@ func putMessageToDeathQueue(topic string, id string, message *Message) bool {
 
 func putMessageToTransactionDeathQueue(topic string, message *Message) bool {
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
@@ -449,7 +445,6 @@ func putMessageToTransactionDeathQueue(topic string, message *Message) bool {
 
 func fetchTransactionPrepareMessagesForChecker(topic string) []*Message {
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
@@ -483,7 +478,6 @@ func startScheduleTrimStream() {
 	var maxLen = 10000
 	go func() {
 		client := redis.NewClient(GetRedisConfig())
-		// Close Conn
 		defer func(client *redis.Client) {
 			err := client.Close()
 			if err != nil {

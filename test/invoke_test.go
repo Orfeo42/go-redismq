@@ -32,6 +32,7 @@ func TestMethodInvoke(t *testing.T) {
 			return fmt.Sprintf("%s:TestResponse", goredismq.MarshalToJsonString(request)), nil
 		}
 	})
+	time.Sleep(5 * time.Second)
 	t.Run("Test Method Invoke", func(t *testing.T) {
 		res := goredismq.Invoke(ctx, &goredismq.InvoiceRequest{
 			Group:   TestGroup,
