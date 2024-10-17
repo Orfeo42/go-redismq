@@ -168,7 +168,7 @@ func blockConsumerTopic(topic string) {
 
 func loopConsumer(topic string) {
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
+
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
@@ -294,9 +294,17 @@ func runConsumeMessage(consumer IMessageListener, message *Message) {
 				return
 			}
 		}()
-		if message.Topic != TopicInternal || message.Tag != TagInvoke {
-			time.Sleep(2 * time.Second)
+		if message.Topic == TopicInternal && message.Tag == TagInvoke {
+			if message.ConsumerDelayMilliSeconds == DefaultConsumerDelayMilliSeconds {
+				message.ConsumerDelayMilliSeconds = 20
+			}
 		}
+		if message.ConsumerDelayMilliSeconds > 0 && message.ConsumerDelayMilliSeconds < 10000 {
+			time.Sleep(time.Duration(message.ConsumerDelayMilliSeconds) * time.Millisecond)
+		} else if message.ConsumerDelayMilliSeconds == 0 {
+			time.Sleep(time.Duration(1000) * time.Millisecond)
+		}
+
 		action := consumer.Consume(ctx, message)
 		fmt.Printf("RedisMQ_Receive Stream Message Consume messageKey:%s result:%d messageId:%v cost:%dms\n", GetMessageKey(message.Topic, message.Tag), action, message.MessageId, cost)
 		if action == ReconsumeLater {
@@ -332,7 +340,7 @@ func messageAck(message *Message) {
 	//
 	//}
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
+
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {

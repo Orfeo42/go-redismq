@@ -7,26 +7,30 @@ import (
 	"strings"
 )
 
+const DefaultConsumerDelayMilliSeconds = 1500
+
 type Message struct {
-	MessageId        string                 `json:"messageId" dc:"MessageId"`
-	Topic            string                 `json:"topic" dc:"Topic"`
-	Tag              string                 `json:"tag" dc:"Tag"`
-	Body             string                 `json:"body" dc:"Body"`
-	Key              string                 `json:"key" dc:"Key"`
-	StartDeliverTime int64                  `json:"startDeliverTime" dc:"Send Time,0-No Delay，Second"`
-	ReconsumeTimes   int                    `json:"reconsumeTimes" dc:"Reconsume Count"`
-	ReconsumeMax     int                    `json:"reconsumeMax" dc:"Reconsume Max Count"`
-	CustomData       map[string]interface{} `json:"customData" dc:"CustomData"`
-	SendTime         int64                  `json:"sendTime" dc:"Sent Time"`
+	MessageId                 string                 `json:"messageId" dc:"MessageId"`
+	Topic                     string                 `json:"topic" dc:"Topic"`
+	Tag                       string                 `json:"tag" dc:"Tag"`
+	Body                      string                 `json:"body" dc:"Body"`
+	Key                       string                 `json:"key" dc:"Key"`
+	StartDeliverTime          int64                  `json:"startDeliverTime" dc:"Send Time,0-No Delay，Second"`
+	ReconsumeTimes            int                    `json:"reconsumeTimes" dc:"Reconsume Count"`
+	ReconsumeMax              int                    `json:"reconsumeMax" dc:"Reconsume Max Count"`
+	CustomData                map[string]interface{} `json:"customData" dc:"CustomData"`
+	SendTime                  int64                  `json:"sendTime" dc:"Sent Time"`
+	ConsumerDelayMilliSeconds int                    `json:"consumerDelayMilliSeconds" dc:"Consumer Delay Milliseconds"`
 }
 
 type MessageMetaData struct {
-	StartDeliverTime int64                  `json:"startDeliverTime" dc:"Send Time,0-No Delay，Second"`
-	ReconsumeTimes   int                    `json:"reconsumeTimes" dc:"Reconsume Count"`
-	ReconsumeMax     int                    `json:"reconsumeMax" dc:"Reconsume Max Count"`
-	CustomData       map[string]interface{} `json:"customData" dc:"CustomData"`
-	Key              string                 `json:"key" dc:"Key"`
-	SendTime         int64                  `json:"sendTime" dc:"SendTime"`
+	StartDeliverTime          int64                  `json:"startDeliverTime" dc:"Send Time,0-No Delay，Second"`
+	ReconsumeTimes            int                    `json:"reconsumeTimes" dc:"Reconsume Count"`
+	ReconsumeMax              int                    `json:"reconsumeMax" dc:"Reconsume Max Count"`
+	CustomData                map[string]interface{} `json:"customData" dc:"CustomData"`
+	Key                       string                 `json:"key" dc:"Key"`
+	SendTime                  int64                  `json:"sendTime" dc:"SendTime"`
+	ConsumerDelayMilliSeconds int                    `json:"consumerDelayMilliSeconds" dc:"Consumer Delay Milliseconds"`
 }
 
 func NewRedisMQMessage(topicWrapper MQTopicEnum, body string) *Message {
@@ -67,12 +71,16 @@ func (message *Message) getDescription() string {
 }
 
 func (message *Message) toStreamAddArgsValues(stream string) *redis.XAddArgs {
+	if message.ConsumerDelayMilliSeconds == 0 {
+		message.ConsumerDelayMilliSeconds = DefaultConsumerDelayMilliSeconds
+	}
 	metadata := MessageMetaData{
-		StartDeliverTime: message.StartDeliverTime,
-		ReconsumeTimes:   message.ReconsumeTimes,
-		CustomData:       message.CustomData,
-		Key:              message.Key,
-		SendTime:         CurrentTimeMillis(),
+		StartDeliverTime:          message.StartDeliverTime,
+		ReconsumeTimes:            message.ReconsumeTimes,
+		CustomData:                message.CustomData,
+		Key:                       message.Key,
+		ConsumerDelayMilliSeconds: message.ConsumerDelayMilliSeconds,
+		SendTime:                  CurrentTimeMillis(),
 	}
 	metaJson, _ := gjson.Marshal(metadata)
 	var values = map[string]interface{}{
@@ -114,6 +122,11 @@ func (message *Message) passStreamMessage(value map[string]interface{}) {
 			message.ReconsumeMax = json.Get("reconsumeMax").Int()
 			message.StartDeliverTime = json.Get("startDeliverTime").Int64()
 			message.SendTime = json.Get("sendTime").Int64()
+			if json.Contains("consumerDelayMilliSeconds") {
+				if consumerDelayMilliSeconds := json.Get("consumerDelayMilliSeconds"); consumerDelayMilliSeconds != nil {
+					message.ConsumerDelayMilliSeconds = consumerDelayMilliSeconds.Int()
+				}
+			}
 			message.CustomData = json.Get("customData").Map()
 			message.Key = json.Get("key").String()
 			message.getUniqueKey()

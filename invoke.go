@@ -26,7 +26,7 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 	//defer close(responseChan)
 
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
+
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
@@ -68,7 +68,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 
 	//check group listener exist
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
+
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {

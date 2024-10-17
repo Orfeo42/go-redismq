@@ -37,7 +37,7 @@ func (t MessageInvokeListener) Consume(ctx context.Context, message *Message) Ac
 	}
 	res := &InvoiceResponse{}
 	client := redis.NewClient(GetRedisConfig())
-	// Close Conn
+
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
