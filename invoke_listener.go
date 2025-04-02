@@ -31,7 +31,11 @@ func (t MessageInvokeListener) Consume(ctx context.Context, message *Message) Ac
 		return CommitMessage
 	}
 	if req == nil || req.Group != Group || len(req.MessageId) == 0 || len(req.Method) == 0 {
-		g.Log().Errorf(ctx, "MessageInvokeListener Invalid Request:%s", MarshalToJsonString(req))
+		if req.Group != Group {
+			g.Log().Infof(ctx, "MessageInvokeListener Skip Request Group:%s Request Group:%s", Group, req.Group)
+		} else {
+			g.Log().Errorf(ctx, "MessageInvokeListener Group:%s Invalid Request:%s", Group, MarshalToJsonString(req))
+		}
 		//ignore
 		return CommitMessage
 	}
