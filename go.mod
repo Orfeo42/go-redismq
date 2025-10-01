@@ -1,4 +1,4 @@
-module github.com/Orfeo42/go-redismq
+module github.com/Orfeo42/go-redismq/v2
 
 go 1.25.1
 
