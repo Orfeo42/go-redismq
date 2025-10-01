@@ -1,6 +1,6 @@
 module github.com/jackyang-hk/go-redismq
 
-go 1.21.3
+go 1.25.1
 
 require (
 	github.com/gogf/gf/v2 v2.6.4
