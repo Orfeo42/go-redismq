@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	goredismq "github.com/Orfeo42/go-redismq/v2"
+	goredismq "github.com/jackyang-hk/go-redismq"
 	"github.com/stretchr/testify/require"
 )
 

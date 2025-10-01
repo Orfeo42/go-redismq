@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	goredismq "github.com/Orfeo42/go-redismq/v2"
 	"github.com/gogf/gf/v2/frame/g"
+	goredismq "github.com/jackyang-hk/go-redismq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
