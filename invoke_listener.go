@@ -29,7 +29,7 @@ func (t MessageInvokeListener) Consume(ctx context.Context, message *Message) Ac
 	err := UnmarshalFromJsonString(message.Body, &req)
 	if err != nil {
 		g.Log().Errorf(ctx, "MessageInvokeListener UnmarshalFromJsonString Body error %s", err.Error())
-		//ignore
+		// ignore
 		return CommitMessage
 	}
 
@@ -39,7 +39,7 @@ func (t MessageInvokeListener) Consume(ctx context.Context, message *Message) Ac
 		} else {
 			g.Log().Errorf(ctx, "MessageInvokeListener Group:%s Invalid Request:%s", Group, MarshalToJsonString(req))
 		}
-		//ignore
+		// ignore
 		return CommitMessage
 	}
 

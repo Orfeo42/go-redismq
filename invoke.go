@@ -87,7 +87,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	invokeId := fmt.Sprintf("%s%d", GenerateRandomAlphanumeric(6), CurrentTimeMillis())
 	req.MessageId = invokeId
 
-	//check group listener exist
+	// check group listener exist
 	client := redis.NewClient(GetRedisConfig())
 
 	defer func(client *redis.Client) {

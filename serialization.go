@@ -21,26 +21,17 @@ func Deserialize(body []byte, v interface{}) (err error) {
 		return
 	}
 
-	err = gjson.Unmarshal(body, &v) // Unmarshal todo mark 加上 &
+	err = gjson.Unmarshal(body, &v)
 
 	return
 }
 
-func isPointerType(value interface{}) bool {
+func isPointerType(value any) bool {
 	typ := reflect.TypeOf(value)
 	kind := typ.Kind()
 
-	return kind == reflect.Ptr
+	return kind == reflect.Pointer
 }
-
-//func Deserialize(body []byte) interface{} {
-//	var result interface{}
-//	err := gjson.Unmarshal(body, &result)
-//	if err != nil {
-//		fmt.Printf("Deserialize err:%s\n", err)
-//	}
-//	return result
-//}
 
 // test case below
 

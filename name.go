@@ -28,7 +28,7 @@ func getBackupQueueName(topic string) string {
 func GenerateUniqueNo(districtCode string) string {
 	uuid := uuid.New()
 
-	return fmt.Sprintf("MQCT_%s_%s", districtCode, strings.Replace(uuid.String(), "-", "", -1))
+	return fmt.Sprintf("MQCT_%s_%s", districtCode, strings.ReplaceAll(uuid.String(), "-", ""))
 }
 
 func GetTransactionPrepareQueueName(topic string) string {

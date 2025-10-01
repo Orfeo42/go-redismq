@@ -126,9 +126,8 @@ func tryCreateGroup(queueName string, topic string) {
 	}
 
 	if !found {
-		// Try To Create Group
-		// Create Consumer Group
-		if err := client.XGroupCreateMkStream(context.Background(), queueName, Group, "$").Err(); err != nil {
+		err := client.XGroupCreateMkStream(context.Background(), queueName, Group, "$").Err()
+		if err != nil {
 			fmt.Printf("MQStream Group exsit queueName:%s groupId:%s err:%s \n", queueName, Group, err.Error())
 
 			return
@@ -213,7 +212,6 @@ func customerIteration(client *redis.Client, topic string) {
 	if message != nil {
 		if consumer := getConsumer(message); consumer != nil {
 			runConsumeMessage(consumer, message)
-			//todo mark use group get message , should drop message which has no consumer
 		} else {
 			fmt.Printf("MQStream Stream Receive Group:{} No Comsumer Drop message::%v\n", message)
 			messageAck(message)
@@ -221,7 +219,7 @@ func customerIteration(client *redis.Client, topic string) {
 
 		count++
 	}
-	//Sleep
+	// Sleep
 	if count == len(Topics) {
 		time.Sleep(1 * time.Second)
 	}
@@ -252,15 +250,15 @@ func loopTransactionCheckerIteration(topic string) {
 			case RollbackTransaction:
 				_, _ = rollbackTransactionPrepareMessage(message)
 			default:
-				//todo mark save send time, max retry times limit 50
+				// todo mark save send time, max retry times limit 50
 				if (CurrentTimeMillis() - message.SendTime) > 1000*60*60*8 {
-					//After 8 Hours, Transaction Message Drop To Death
+					// After 8 Hours, Transaction Message Drop To Death
 					putMessageToTransactionDeathQueue(topic, message)
 				}
 			}
 		} else {
 			if (CurrentTimeMillis() - message.SendTime) > 1000*60*60*24*7 {
-				//After 7 Days, Transaction Rollback
+				// After 7 Days, Transaction Rollback
 				_, _ = rollbackTransactionPrepareMessage(message)
 			}
 		}
@@ -308,7 +306,7 @@ func runConsumeMessage(consumer IMessageListener, message *Message) {
 		cost = CurrentTimeMillis() - message.SendTime
 		// history no expire time
 		if (CurrentTimeMillis() - message.SendTime) > 1000*60*60*24*3 {
-			//message should expire after 3 days, drop
+			// message should expire after 3 days, drop
 			fmt.Printf("RedisMQ_Receive Stream Message Exception After 3 Days Drop Expired messageKey:%s messageId:%v\n ", GetMessageKey(message.Topic, message.Tag), message.MessageId)
 
 			return
@@ -422,7 +420,7 @@ func blockReceiveConsumerMessage(client *redis.Client, topic string) *Message {
 	}()
 
 	streamName := GetQueueName(topic)
-	//fmt.Printf("MQStream XReadGroup blockReceiveConsumerMessage streamName=%s\n", streamName)
+
 	result, err := client.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    Group,
 		Consumer: consumerName,

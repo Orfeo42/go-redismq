@@ -23,15 +23,16 @@ func TestMethodInvoke(t *testing.T) {
 
 	ctx := context.Background()
 	goredismq.RegisterInvoke("TestInvoke", func(ctx context.Context, request interface{}) (response interface{}, err error) {
-		if request == "error" {
+		switch request {
+		case "error":
 			return nil, errors.New("error")
-		} else if request == "panic" {
+		case "panic":
 			panic("panic")
-		} else if request == "timeout" {
+		case "timeout":
 			time.Sleep(30 * time.Second)
 
 			return nil, errors.New("timeout")
-		} else {
+		default:
 			return goredismq.MarshalToJsonString(request) + ":TestResponse", nil
 		}
 	})
