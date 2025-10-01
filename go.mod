@@ -1,4 +1,4 @@
-module github.com/jackyang-hk/go-redismq
+module github.com/Orfeo42/go-redismq
 
 go 1.25.1
 
