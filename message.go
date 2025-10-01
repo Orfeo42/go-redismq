@@ -117,7 +117,7 @@ func (message *Message) passStreamMessage(value map[string]interface{}) {
 	}
 
 	if len(metadata) > 0 {
-		json, err := gjson.LoadJson(metadata, true)
+		json, err := gjson.LoadJson([]byte(metadata), true)
 		if err == nil {
 			defer func() {
 				if exception := recover(); exception != nil {
