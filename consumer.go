@@ -541,6 +541,7 @@ func fetchTransactionPrepareMessagesForChecker(topic string) []*Message {
 
 func startScheduleTrimStream() {
 	var maxLen = 10000
+	const trimInterval = time.Hour
 	go func() {
 		client := redis.NewClient(GetRedisConfig())
 		defer func(client *redis.Client) {
@@ -572,7 +573,7 @@ func startScheduleTrimStream() {
 			fmt.Printf("MQStream Cut maxLen:%d queueName:%s group:%s consumerName:%s\n", maxLen, queueName, Group, consumerName)
 			consumersCheck(queueName)
 
-			time.Sleep(1000 * 60 * 10 * time.Second) //10分钟修剪一次
+			time.Sleep(trimInterval)
 		}
 	}()
 }
