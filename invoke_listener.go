@@ -68,13 +68,6 @@ func (t messageInvokeListener) Consume(ctx context.Context, message *Message) Ac
 		return CommitMessage
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
-
 	replyChannel := getReplyChannel(req)
 
 	defer func() {
@@ -142,6 +135,7 @@ func RegisterInvoke(ctx context.Context, methodName string, op func(ctx context.
 	}
 
 	invokeMu.Lock()
+
 	_, exists := invokeMap[methodName]
 	if !exists {
 		invokeMap[methodName] = op
@@ -164,13 +158,6 @@ func keepAliveMessageInvokeListener(ctx context.Context) {
 
 		return
 	}
-
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	client.Set(ctx, "MessageInvokeGroup:"+getGroup(), true, 300*time.Second)
 

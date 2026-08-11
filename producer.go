@@ -19,11 +19,11 @@ func Send(ctx context.Context, message *Message) (bool, error) {
 
 func SendTransaction(ctx context.Context, message *Message, transactionExecuter func(messageToSend *Message) (TransactionStatus, error)) (bool, error) {
 	if message.Tag == TagBlank {
-		return false, errors.New("blank tag message")
+		return false, ErrBlankTag
 	}
 
 	if message.StartDeliverTime > 0 {
-		return false, errors.New("delay message not support transaction")
+		return false, ErrDelayNotSupportedInTransaction
 	}
 
 	send, err := sendTransactionPrepareMessage(ctx, message)
@@ -48,8 +48,10 @@ func SendTransaction(ctx context.Context, message *Message, transactionExecuter 
 }
 
 var (
-	ErrMessageIDNotBlank    = errors.New("redismq: message id must be blank when sending")
-	ErrDeliverTimeInThePast = errors.New("redismq: start deliver time must be in the future")
+	ErrMessageIDNotBlank              = errors.New("redismq: message id must be blank when sending")
+	ErrDeliverTimeInThePast           = errors.New("redismq: start deliver time must be in the future")
+	ErrBlankTag                       = errors.New("redismq: message tag must not be blank")
+	ErrDelayNotSupportedInTransaction = errors.New("redismq: delayed message cannot be sent transactionally")
 )
 
 func sendDelayMessage(ctx context.Context, message *Message) (bool, error) {
@@ -69,7 +71,7 @@ func sendDelayMessage(ctx context.Context, message *Message) (bool, error) {
 
 func sendMessage(ctx context.Context, message *Message, source string) (bool, error) {
 	if message.Tag == TagBlank {
-		return false, errors.New("blank空消息")
+		return false, ErrBlankTag
 	}
 
 	if len(message.MessageId) != 0 {
@@ -83,16 +85,14 @@ func sendMessage(ctx context.Context, message *Message, source string) (bool, er
 		return false, err
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
-
 	stampTraceID(ctx, message)
 
-	streamMessageId, err := client.XAdd(ctx, message.toStreamAddArgsValues(streamname.Queue(message.Topic))).Result()
+	streamAddArgs, err := message.toStreamAddArgsValues(streamname.Queue(message.Topic))
+	if err != nil {
+		return false, err
+	}
+
+	streamMessageId, err := client.XAdd(ctx, streamAddArgs).Result()
 	if err != nil {
 		logAttrs(ctx, slog.LevelWarn, "redismq: stream publish failed", append(messageAttrs(message), causeAttr(err), slog.String("stream", streamname.Queue(message.Topic)))...)
 
@@ -107,7 +107,7 @@ func sendMessage(ctx context.Context, message *Message, source string) (bool, er
 
 func sendTransactionPrepareMessage(ctx context.Context, message *Message) (bool, error) {
 	if message.Tag == TagBlank {
-		return false, errors.New("Blank Message")
+		return false, ErrBlankTag
 	}
 
 	message.MessageId = idgen.UniqueNo(message.Topic)
@@ -117,13 +117,6 @@ func sendTransactionPrepareMessage(ctx context.Context, message *Message) (bool,
 	if err != nil {
 		return false, err
 	}
-
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	stampTraceID(ctx, message)
 
@@ -162,13 +155,6 @@ func delTransactionPrepareMessage(ctx context.Context, message *Message) (bool, 
 		return false, err
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
-
 	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.Del(ctx, message.MessageId)
 		pipe.LRem(ctx, streamname.TransactionPrepareQueue(message.Topic), 1, message.MessageId)
@@ -195,19 +181,17 @@ func commitTransactionPrepareMessage(ctx context.Context, message *Message) (boo
 		return false, err
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
-
 	stampTraceID(ctx, message)
 
 	streamMessageId := ""
 
 	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		streamMessageId, _ = client.XAdd(ctx, message.toStreamAddArgsValues(streamname.Queue(message.Topic))).Result()
+		streamAddArgs, argsErr := message.toStreamAddArgsValues(streamname.Queue(message.Topic))
+		if argsErr != nil {
+			return argsErr
+		}
+
+		streamMessageId, _ = client.XAdd(ctx, streamAddArgs).Result()
 		message.MessageId = streamMessageId
 
 		pipe.Del(ctx, oldMessageId)

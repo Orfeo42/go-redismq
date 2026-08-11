@@ -43,7 +43,7 @@ func TestMethodInvoke(t *testing.T) {
 		invokeMu.Unlock()
 	})
 
-	err := RegisterRedisMqConfig(&RedisMqConfig{
+	err := RegisterRedisMqConfig(context.Background(), &RedisMqConfig{
 		Group:    testGroup,
 		Addr:     "127.0.0.1:6379",
 		Password: "",

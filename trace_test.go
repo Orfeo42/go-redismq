@@ -20,7 +20,10 @@ func TestStampTraceIDRoundTrip(t *testing.T) {
 		message := &Message{Topic: "t", Tag: "tag1", Body: "body"}
 		stampTraceID(context.Background(), message)
 
-		args := message.toStreamAddArgsValues("stream")
+		args, err := message.toStreamAddArgsValues("stream")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
 
 		values, ok := args.Values.(map[string]any)
 		if !ok {

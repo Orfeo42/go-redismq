@@ -48,13 +48,6 @@ func polling(ctx context.Context) {
 		return
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
-
 	result, err := client.Keys(ctx, mqDelayQueueName).Result()
 	if err != nil {
 		return
@@ -82,13 +75,6 @@ func pollingCore(ctx context.Context, key string) {
 
 		return
 	}
-
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	result, err := client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
 		Min:    "0",
@@ -149,13 +135,6 @@ func SendDelay(ctx context.Context, message *Message, delay int64) (bool, error)
 	if err != nil {
 		return false, err
 	}
-
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	stampTraceID(ctx, message)
 

@@ -14,6 +14,10 @@ build-test:
 deadcode:
     ./.scripts/deadcode-check.sh
 
+# Auto-fix every lint finding the linters can repair themselves
+format dir="./...":
+    golangci-lint run --fix {{ dir }}
+
 # Build the module. Pass a dir to narrow the build (default: ./...)
 build dir="./...":
     go build -v {{ dir }}

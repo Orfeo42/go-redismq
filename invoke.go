@@ -50,13 +50,6 @@ func listenForResponse(ctx context.Context, req *InvokeRequest, responseChan cha
 		return
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
-
 	replyChannel := getReplyChannel(req)
 
 	pubSub := client.Subscribe(ctx, replyChannel)
@@ -102,13 +95,6 @@ func Invoke(ctx context.Context, req *InvokeRequest, timeoutSeconds int) *Invoke
 	if err != nil {
 		return failedInvokeResponse(err.Error())
 	}
-
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	data, err := client.Get(ctx, "MessageInvokeGroup:"+req.Group).Result()
 	if err != nil {

@@ -111,7 +111,9 @@ func NewDefaultLogger() Logger {
 
 func logAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
 	loggerMu.RLock()
+
 	l := logger
+
 	loggerMu.RUnlock()
 
 	if l == nil {

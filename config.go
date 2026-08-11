@@ -1,18 +1,21 @@
 package redismq
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
 )
 
 var (
-	configMu sync.RWMutex
-	group    = "GID_Default"
-	addr     = ""
-	password = ""
-	database = 0
+	configMu    sync.RWMutex
+	group       = "GID_Default"
+	addr        = ""
+	password    = ""
+	database    = 0
+	redisClient *redis.Client
 )
 
 var (
@@ -29,7 +32,7 @@ type RedisMqConfig struct {
 	Database int
 }
 
-func RegisterRedisMqConfig(one *RedisMqConfig) error {
+func RegisterRedisMqConfig(ctx context.Context, one *RedisMqConfig) error {
 	if one == nil {
 		return ErrConfigNil
 	}
@@ -51,6 +54,21 @@ func RegisterRedisMqConfig(one *RedisMqConfig) error {
 
 	if one.Database >= 0 {
 		database = one.Database
+	}
+
+	previous := redisClient
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     addr,
+		Password: password,
+		DB:       database,
+	})
+
+	if previous == nil {
+		return nil
+	}
+
+	if err := previous.Close(); err != nil {
+		logAttrs(ctx, slog.LevelWarn, "redismq: retiring previous redis client failed", causeAttr(err))
 	}
 
 	return nil

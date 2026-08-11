@@ -1,14 +1,18 @@
-package redismq
+package mqtype
 
 import (
-	"context"
 	"encoding/json"
-	"log/slog"
+	"fmt"
+	"path/filepath"
+	"runtime"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 const DefaultConsumerDelayMilliSeconds = 1500
+
+const traceIDKey = "traceId"
 
 type Message struct {
 	MessageId                 string         `dc:"MessageId"                    json:"messageId"`
@@ -34,6 +38,20 @@ type messageMetaData struct {
 	ConsumerDelayMilliSeconds int            `dc:"Consumer Delay Milliseconds"  json:"consumerDelayMilliSeconds"`
 }
 
+type streamMetadata struct {
+	StartDeliverTime          int64          `json:"startDeliverTime"`
+	ReconsumeTimes            int            `json:"reconsumeTimes"`
+	ReconsumeMax              int            `json:"reconsumeMax"`
+	CustomData                map[string]any `json:"customData"`
+	Key                       string         `json:"key"`
+	SendTime                  int64          `json:"sendTime"`
+	ConsumerDelayMilliSeconds *int           `json:"consumerDelayMilliSeconds"`
+}
+
+func currentTimeMillis() int64 {
+	return time.Now().UnixNano() / int64(time.Millisecond)
+}
+
 func NewRedisMQMessage(topicWrapper MQTopicEnum, body string) *Message {
 	return &Message{
 		Topic:    topicWrapper.Topic,
@@ -43,7 +61,7 @@ func NewRedisMQMessage(topicWrapper MQTopicEnum, body string) *Message {
 	}
 }
 
-func (message *Message) getUniqueKey() string {
+func (message *Message) GetUniqueKey() string {
 	if message.CustomData == nil {
 		message.CustomData = make(map[string]any)
 	}
@@ -62,7 +80,7 @@ func (message *Message) getUniqueKey() string {
 	return message.MessageId
 }
 
-func (message *Message) isBroadcastingMessage() bool {
+func (message *Message) IsBroadcastingMessage() bool {
 	value, ok := message.CustomData["messageModel"].(string)
 	if !ok {
 		return false
@@ -71,7 +89,7 @@ func (message *Message) isBroadcastingMessage() bool {
 	return value == "BROADCASTING"
 }
 
-func (message *Message) toStreamAddArgsValues(stream string) (*redis.XAddArgs, error) {
+func (message *Message) ToStreamAddArgsValues(stream string) (*redis.XAddArgs, error) {
 	if message.ConsumerDelayMilliSeconds == 0 {
 		message.ConsumerDelayMilliSeconds = DefaultConsumerDelayMilliSeconds
 	}
@@ -103,13 +121,11 @@ func (message *Message) toStreamAddArgsValues(stream string) (*redis.XAddArgs, e
 	}, nil
 }
 
-func (message *Message) decodeStreamMetadata(ctx context.Context, metadata string) {
+func (message *Message) decodeStreamMetadata(metadata string) error {
 	var parsed streamMetadata
 
 	if err := json.Unmarshal([]byte(metadata), &parsed); err != nil {
-		logAttrs(ctx, slog.LevelWarn, "redismq: stream metadata unmarshal failed", causeAttr(err), slog.String("message_id", message.MessageId))
-
-		return
+		return err
 	}
 
 	message.ReconsumeTimes = parsed.ReconsumeTimes
@@ -123,10 +139,16 @@ func (message *Message) decodeStreamMetadata(ctx context.Context, metadata strin
 		message.ConsumerDelayMilliSeconds = *parsed.ConsumerDelayMilliSeconds
 	}
 
-	message.getUniqueKey()
+	message.GetUniqueKey()
+
+	return nil
 }
 
-func (message *Message) passStreamMessage(ctx context.Context, value map[string]any) {
+// PassStreamMessage populates the message from a raw stream entry. It returns
+// panicStack non-nil only when the metadata decode step panicked and was
+// recovered; callers use that to distinguish a recovered panic (log at error
+// level with a stack) from a plain decode failure (log at warn level).
+func (message *Message) PassStreamMessage(value map[string]any) (panicStack []string, err error) {
 	if target, ok := value["topic"].(string); ok {
 		message.Topic = target
 	}
@@ -141,7 +163,7 @@ func (message *Message) passStreamMessage(ctx context.Context, value map[string]
 
 	metadata, ok := value["metadata"].(string)
 	if !ok || len(metadata) == 0 {
-		return
+		return nil, nil
 	}
 
 	defer func() {
@@ -150,19 +172,55 @@ func (message *Message) passStreamMessage(ctx context.Context, value map[string]
 			return
 		}
 
-		err := panicError(exception)
-		logAttrs(ctx, slog.LevelError, "redismq: passStreamMessage panic recovered", causeAttr(err), stackAttr(2), slog.String("message_id", message.MessageId))
+		err = panicError(exception)
+		panicStack = captureStack(2)
 	}()
 
-	message.decodeStreamMetadata(ctx, metadata)
+	return nil, message.decodeStreamMetadata(metadata)
 }
 
-type streamMetadata struct {
-	StartDeliverTime          int64          `json:"startDeliverTime"`
-	ReconsumeTimes            int            `json:"reconsumeTimes"`
-	ReconsumeMax              int            `json:"reconsumeMax"`
-	CustomData                map[string]any `json:"customData"`
-	Key                       string         `json:"key"`
-	SendTime                  int64          `json:"sendTime"`
-	ConsumerDelayMilliSeconds *int           `json:"consumerDelayMilliSeconds"`
+func panicError(exception any) error {
+	err, ok := exception.(error)
+	if !ok {
+		err = fmt.Errorf("redismq: panic: %v", exception)
+	}
+
+	return err
+}
+
+func captureStack(skip int) []string {
+	var pcs [32]uintptr
+
+	n := runtime.Callers(skip, pcs[:])
+
+	frames := runtime.CallersFrames(pcs[:n])
+
+	var stack []string
+
+	for {
+		frame, more := frames.Next()
+		stack = append(stack, fmt.Sprintf("%s %s:%d", frame.Function, filepath.Base(frame.File), frame.Line))
+
+		if !more {
+			break
+		}
+	}
+
+	return stack
+}
+
+func (message *Message) TraceID() string {
+	if value, ok := message.CustomData[traceIDKey].(string); ok {
+		return value
+	}
+
+	return ""
+}
+
+func (message *Message) SetTraceID(traceID string) {
+	if message.CustomData == nil {
+		message.CustomData = make(map[string]any)
+	}
+
+	message.CustomData[traceIDKey] = traceID
 }

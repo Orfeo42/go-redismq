@@ -3,7 +3,6 @@ package redismq
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"sync"
 	"testing"
@@ -46,7 +45,7 @@ func installRaceSafeTestLogger(t *testing.T) {
 		SetLogger(original)
 	})
 
-	SetSlogLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	SetSlogLogger(slog.New(slog.DiscardHandler))
 }
 
 func TestConcurrentListenerRegistrationAndLookup(t *testing.T) {
@@ -75,6 +74,7 @@ func TestConcurrentListenerRegistrationAndLookup(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func(i int) {
 				defer wg.Done()
+
 				RegisterListener(context.Background(), &raceTestListener{topic: fmt.Sprintf("topic-%d", i), tag: "tag"})
 			}(i)
 		}
@@ -82,6 +82,7 @@ func TestConcurrentListenerRegistrationAndLookup(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func() {
 				defer wg.Done()
+
 				_ = snapshotListeners()
 			}()
 		}
@@ -113,6 +114,7 @@ func TestConcurrentCheckerRegistrationAndLookup(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func(i int) {
 				defer wg.Done()
+
 				RegisterChecker(context.Background(), &raceTestChecker{topic: fmt.Sprintf("topic-%d", i), tag: "tag"})
 			}(i)
 		}
@@ -120,6 +122,7 @@ func TestConcurrentCheckerRegistrationAndLookup(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func() {
 				defer wg.Done()
+
 				_ = snapshotCheckers()
 			}()
 		}
@@ -162,6 +165,7 @@ func TestConcurrentInvokeRegistrationAndLookup(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func(i int) {
 				defer wg.Done()
+
 				_, _ = getInvoke(fmt.Sprintf("method-%d", i))
 			}(i)
 		}
@@ -184,13 +188,15 @@ func TestConcurrentSetLoggerAndLogAttrs(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func() {
 				defer wg.Done()
-				SetSlogLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+				SetSlogLogger(slog.New(slog.DiscardHandler))
 			}()
 		}
 
 		for i := 0; i < n; i++ {
 			go func() {
 				defer wg.Done()
+
 				logAttrs(context.Background(), slog.LevelInfo, "redismq: race test log", slog.String("case", "concurrent"))
 			}()
 		}
@@ -213,6 +219,7 @@ func TestConcurrentSetTraceIDFromContextAndStampTraceID(t *testing.T) {
 		for i := 0; i < n; i++ {
 			go func(i int) {
 				defer wg.Done()
+
 				SetTraceIDFromContext(func(_ context.Context) string {
 					return fmt.Sprintf("trace-%d", i)
 				})

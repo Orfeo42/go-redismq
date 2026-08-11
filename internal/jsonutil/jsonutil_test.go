@@ -19,6 +19,7 @@ func TestMarshalString(t *testing.T) {
 
 	t.Run("valid target returns json string", func(t *testing.T) {
 		got := MarshalString(sample{Name: "foo"})
+
 		want := `{"name":"foo"}`
 		if got != want {
 			t.Fatalf("expected %q, got %q", want, got)

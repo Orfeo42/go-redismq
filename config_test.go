@@ -1,6 +1,7 @@
 package redismq
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -25,7 +26,7 @@ func TestRegisterRedisMqConfig(t *testing.T) {
 		group, savedAddr, savedPassword, savedDatabase := snapshotConfig()
 		restoreConfig(t, group, savedAddr, savedPassword, savedDatabase)
 
-		err := RegisterRedisMqConfig(nil)
+		err := RegisterRedisMqConfig(context.Background(), nil)
 		if !errors.Is(err, ErrConfigNil) {
 			t.Fatalf("expected ErrConfigNil, got %v", err)
 		}
@@ -35,7 +36,7 @@ func TestRegisterRedisMqConfig(t *testing.T) {
 		group, savedAddr, savedPassword, savedDatabase := snapshotConfig()
 		restoreConfig(t, group, savedAddr, savedPassword, savedDatabase)
 
-		err := RegisterRedisMqConfig(&RedisMqConfig{
+		err := RegisterRedisMqConfig(context.Background(), &RedisMqConfig{
 			Group: "GID_Test",
 			Addr:  "",
 		})
@@ -48,7 +49,7 @@ func TestRegisterRedisMqConfig(t *testing.T) {
 		group, savedAddr, savedPassword, savedDatabase := snapshotConfig()
 		restoreConfig(t, group, savedAddr, savedPassword, savedDatabase)
 
-		err := RegisterRedisMqConfig(&RedisMqConfig{
+		err := RegisterRedisMqConfig(context.Background(), &RedisMqConfig{
 			Group: "",
 			Addr:  "127.0.0.1:6379",
 		})
@@ -61,7 +62,7 @@ func TestRegisterRedisMqConfig(t *testing.T) {
 		group, savedAddr, savedPassword, savedDatabase := snapshotConfig()
 		restoreConfig(t, group, savedAddr, savedPassword, savedDatabase)
 
-		err := RegisterRedisMqConfig(&RedisMqConfig{
+		err := RegisterRedisMqConfig(context.Background(), &RedisMqConfig{
 			Group:    "GID_Test",
 			Addr:     "127.0.0.1:6379",
 			Password: "secret",
@@ -93,7 +94,7 @@ func TestRegisterRedisMqConfig(t *testing.T) {
 		group, savedAddr, savedPassword, savedDatabase := snapshotConfig()
 		restoreConfig(t, group, savedAddr, savedPassword, savedDatabase)
 
-		err := RegisterRedisMqConfig(&RedisMqConfig{
+		err := RegisterRedisMqConfig(context.Background(), &RedisMqConfig{
 			Group:    "GID_First",
 			Addr:     "127.0.0.1:7000",
 			Password: "first_secret",
@@ -103,7 +104,7 @@ func TestRegisterRedisMqConfig(t *testing.T) {
 			t.Fatalf("expected nil error, got %v", err)
 		}
 
-		err = RegisterRedisMqConfig(nil)
+		err = RegisterRedisMqConfig(context.Background(), nil)
 		if !errors.Is(err, ErrConfigNil) {
 			t.Fatalf("expected ErrConfigNil, got %v", err)
 		}

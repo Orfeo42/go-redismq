@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -15,18 +17,71 @@ type sourceLine struct {
 	text string
 }
 
+var generatedHeaderRe = regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
+
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+
+	_, self, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("failed to determine caller for module root lookup")
+	}
+
+	dir := filepath.Dir(self)
+
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found while walking up from guard_test.go")
+		}
+
+		dir = parent
+	}
+}
+
+func isGeneratedFile(t *testing.T, path string) bool {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file %s: %v", path, err)
+	}
+
+	for _, raw := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+
+		return generatedHeaderRe.MatchString(line)
+	}
+
+	return false
+}
+
+func isLoggerFallbackFile(file string) bool {
+	return filepath.Base(file) == "logger.go"
+}
+
 func listGoSourceFiles(t *testing.T) []string {
 	t.Helper()
 
+	root := moduleRoot(t)
+
 	var files []string
 
-	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if entry.IsDir() {
-			if entry.Name() == ".git" {
+			switch entry.Name() {
+			case ".git", ".tools", "ruleguard":
 				return filepath.SkipDir
 			}
 
@@ -43,7 +98,16 @@ func listGoSourceFiles(t *testing.T) []string {
 			return nil
 		}
 
-		files = append(files, filepath.ToSlash(path))
+		if isGeneratedFile(t, path) {
+			return nil
+		}
+
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+
+		files = append(files, filepath.ToSlash(rel))
 
 		return nil
 	})
@@ -80,7 +144,7 @@ func TestNoPrintfLogging(t *testing.T) {
 	forbidden := []string{"logger.Debugf(", "logger.Infof(", "logger.Warnf(", "logger.Errorf("}
 
 	for _, file := range listGoSourceFiles(t) {
-		if file == "logger.go" {
+		if isLoggerFallbackFile(file) {
 			continue
 		}
 

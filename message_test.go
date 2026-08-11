@@ -19,7 +19,10 @@ func TestPassStreamMessage(t *testing.T) {
 		}
 		original.setTraceID("trace-xyz")
 
-		args := original.toStreamAddArgsValues("stream1")
+		args, err := original.toStreamAddArgsValues("stream1")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
 
 		values, ok := args.Values.(map[string]any)
 		if !ok {

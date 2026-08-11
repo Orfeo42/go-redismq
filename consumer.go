@@ -126,12 +126,6 @@ func tryCreateGroup(ctx context.Context, queueName string, topic string) {
 
 		return
 	}
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	message := &Message{
 		Topic: topic,
@@ -141,7 +135,15 @@ func tryCreateGroup(ctx context.Context, queueName string, topic string) {
 
 	grp := getGroup()
 
-	_, err = client.XAdd(ctx, message.toStreamAddArgsValues(queueName)).Result()
+	streamAddArgs, err := message.toStreamAddArgsValues(queueName)
+	if err != nil {
+		logAttrs(ctx, slog.LevelWarn, "redismq: group setup probe message marshal failed",
+			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic), causeAttr(err))
+
+		return
+	}
+
+	_, err = client.XAdd(ctx, streamAddArgs).Result()
 	if err != nil {
 		logAttrs(ctx, slog.LevelInfo, "redismq: group setup probe message failed, group may already exist",
 			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic), causeAttr(err))
@@ -188,12 +190,6 @@ func tryCreateConsumer(ctx context.Context, queueName string) {
 
 		return
 	}
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	grp := getGroup()
 	name := getConsumerName()
@@ -231,13 +227,6 @@ func loopConsumer(ctx context.Context, topic string) {
 		return
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
-
 	for {
 		if ctx.Err() != nil {
 			logAttrs(ctx, slog.LevelInfo, "redismq: consumer loop stopped, context cancelled")
@@ -263,6 +252,7 @@ func customerIteration(ctx context.Context, client *redis.Client, topic string) 
 	message := blockReceiveConsumerMessage(ctx, client, topic)
 	if message != nil {
 		dispatchConsumerMessage(ctx, message)
+
 		count++
 	}
 
@@ -484,13 +474,6 @@ func messageAck(ctx context.Context, message *Message) {
 		return
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
-
 	streamName := streamname.Queue(message.Topic)
 
 	ackResult, err := client.XAck(ctx, streamName, getGroup(), message.MessageId).Result()
@@ -582,14 +565,14 @@ func putMessageToDeathQueue(ctx context.Context, message *Message) bool {
 		return false
 	}
 
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
+	streamAddArgs, err := message.toStreamAddArgsValues(streamname.DeathQueue())
+	if err != nil {
+		logAttrs(ctx, slog.LevelError, "redismq: death queue message marshal failed", append(messageAttrs(message), causeAttr(err))...)
 
-	streamMessageId, err := client.XAdd(ctx, message.toStreamAddArgsValues(streamname.DeathQueue())).Result()
+		return false
+	}
+
+	streamMessageId, err := client.XAdd(ctx, streamAddArgs).Result()
 	if err != nil {
 		logAttrs(ctx, slog.LevelError, "redismq: push message to death queue failed", append(messageAttrs(message), causeAttr(err))...)
 
@@ -609,13 +592,6 @@ func putMessageToTransactionDeathQueue(ctx context.Context, topic string, messag
 
 		return false
 	}
-
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.LRem(ctx, streamname.TransactionPrepareQueue(topic), 1, message.MessageId)
@@ -639,13 +615,6 @@ func fetchTransactionPrepareMessagesForChecker(ctx context.Context, topic string
 
 		return []*Message{}
 	}
-
-	defer func(client *redis.Client) {
-		err := client.Close()
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-		}
-	}(client)
 
 	result, err := client.LRange(ctx, streamname.TransactionPrepareQueue(topic), 0, -1).Result()
 	if err != nil {
@@ -697,13 +666,6 @@ func startScheduleTrimStream(ctx context.Context) {
 
 			return
 		}
-
-		defer func(client *redis.Client) {
-			err := client.Close()
-			if err != nil {
-				logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
-			}
-		}(client)
 
 		for {
 			startScheduleTrimStreamIteration(ctx, client)

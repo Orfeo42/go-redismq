@@ -16,10 +16,12 @@ func panicError(exception any) error {
 }
 
 func newRedisClient() (*redis.Client, error) {
-	options, err := getRedisConfig()
-	if err != nil {
-		return nil, err
+	configMu.RLock()
+	defer configMu.RUnlock()
+
+	if len(addr) == 0 {
+		return nil, ErrConfigNotSet
 	}
 
-	return redis.NewClient(options), nil
+	return redisClient, nil
 }

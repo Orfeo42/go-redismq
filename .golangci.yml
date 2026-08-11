@@ -118,6 +118,9 @@ linters:
       - linters:
           - dupword
         source: "`"
+      - linters:
+          - sloglint
+        path: "(^|/)logger\\.go$"
 
   settings:
     gocritic:

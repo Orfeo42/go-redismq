@@ -71,7 +71,7 @@ func TestProducerAndConsumer(t *testing.T) {
 		listenerMu.Unlock()
 	})
 
-	err := RegisterRedisMqConfig(&RedisMqConfig{
+	err := RegisterRedisMqConfig(context.Background(), &RedisMqConfig{
 		Group:    testGroup,
 		Addr:     "127.0.0.1:6379",
 		Password: "",
