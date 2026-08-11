@@ -1,45 +1,36 @@
 package go_redismq
 
 import (
+	"encoding/json"
+	"errors"
 	"reflect"
-
-	"github.com/gogf/gf/v2/encoding/gjson"
-	"github.com/gogf/gf/v2/errors/gerror"
 )
 
-func Serialize(target interface{}) []byte {
-	jsonData, _ := gjson.Marshal(target)
+var ErrDeserializeTargetNotPointer = errors.New("redismq: v should be pointer type")
+
+func Serialize(target any) []byte {
+	jsonData, err := json.Marshal(target)
+	if err != nil {
+		return nil
+	}
 
 	return jsonData
 }
 
-func Deserialize(body []byte, v interface{}) (err error) {
+func Deserialize(body []byte, v any) error {
 	if !isPointerType(v) {
-		err = gerror.New("v should be pointer type")
-
-		return
+		return ErrDeserializeTargetNotPointer
 	}
 
-	err = gjson.Unmarshal(body, &v) // Unmarshal todo mark 加上 &
-
-	return
+	return json.Unmarshal(body, v)
 }
 
-func isPointerType(value interface{}) bool {
+func isPointerType(value any) bool {
 	typ := reflect.TypeOf(value)
 	kind := typ.Kind()
 
 	return kind == reflect.Pointer
 }
-
-//func Deserialize(body []byte) interface{} {
-//	var result interface{}
-//	err := gjson.Unmarshal(body, &result)
-//	if err != nil {
-//		fmt.Printf("Deserialize err:%s\n", err)
-//	}
-//	return result
-//}
 
 type Person struct {
 	Name   string

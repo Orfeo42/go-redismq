@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 )
 
 type IMessageListener interface {
@@ -25,7 +24,7 @@ func Listeners() map[string]IMessageListener {
 }
 
 func isValidTopic(topic string) bool {
-	return len(topic) > 0 && strings.Compare(topic, "*") != 0
+	return len(topic) > 0 && topic != "*"
 }
 
 func RegisterListener(ctx context.Context, i IMessageListener) {
@@ -49,13 +48,15 @@ func RegisterListener(ctx context.Context, i IMessageListener) {
 		return
 	}
 
-	if Listeners()[GetMessageKey(i.GetTopic(), i.GetTag())] != nil {
-		logAttrs(ctx, slog.LevelWarn, "redismq: duplicate listener for message key, listener dropped", slog.String("message_key", GetMessageKey(i.GetTopic(), i.GetTag())), slog.String("listener_type", fmt.Sprintf("%T", i)))
-	} else {
-		messageKey := GetMessageKey(i.GetTopic(), i.GetTag())
-		Listeners()[messageKey] = i
+	messageKey := GetMessageKey(i.GetTopic(), i.GetTag())
 
-		Topics = append(Topics, i.GetTopic())
-		logAttrs(ctx, slog.LevelInfo, "redismq: listener registered", slog.String("message_key", messageKey), slog.String("listener_type", fmt.Sprintf("%T", i)))
+	if Listeners()[messageKey] != nil {
+		logAttrs(ctx, slog.LevelWarn, "redismq: duplicate listener for message key, listener dropped", slog.String("message_key", messageKey), slog.String("listener_type", fmt.Sprintf("%T", i)))
+
+		return
 	}
+
+	Listeners()[messageKey] = i
+	Topics = append(Topics, i.GetTopic())
+	logAttrs(ctx, slog.LevelInfo, "redismq: listener registered", slog.String("message_key", messageKey), slog.String("listener_type", fmt.Sprintf("%T", i)))
 }

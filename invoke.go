@@ -11,26 +11,41 @@ import (
 )
 
 type InvoiceRequest struct {
-	MessageId string      `json:"messageId"`
-	Group     string      `json:"group"`
-	Method    string      `json:"method"`
-	Request   interface{} `json:"request"`
+	MessageId string `json:"messageId"`
+	Group     string `json:"group"`
+	Method    string `json:"method"`
+	Request   any    `json:"request"`
 }
 
 type InvoiceResponse struct {
-	Status   bool        `json:"status"`
-	Response interface{} `json:"response"`
+	Status   bool `json:"status"`
+	Response any  `json:"response"`
+}
+
+func failedInvokeResponse(response string) *InvoiceResponse {
+	return &InvoiceResponse{Status: false, Response: response}
+}
+
+func decodeInvokeResponse(ctx context.Context, payload string, replyChannel string) (*InvoiceResponse, bool) {
+	var res *InvoiceResponse
+
+	err := json.Unmarshal([]byte(payload), &res)
+	if err != nil {
+		logAttrs(ctx, slog.LevelWarn, "redismq: invoke response deserialization failed", causeAttr(err), slog.String("reply_channel", replyChannel))
+
+		return nil, false
+	}
+
+	return res, true
 }
 
 func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan chan *InvoiceResponse) {
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
 
 		return
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -51,32 +66,22 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 
 	ch := pubSub.Channel()
 
-	for {
-		select {
-		case msg, ok := <-ch:
-			if !ok {
-				logAttrs(ctx, slog.LevelInfo, "redismq: invoke response subscription channel closed", slog.String("reply_channel", replyChannel))
-
-				return
-			}
-
-			var res *InvoiceResponse
-
-			err := json.Unmarshal([]byte(msg.Payload), &res)
-			if err != nil {
-				logAttrs(ctx, slog.LevelWarn, "redismq: invoke response deserialization failed", causeAttr(err), slog.String("reply_channel", replyChannel))
-
-				return
-			}
-
-			responseChan <- res
-
-			return
-		case <-ctx.Done():
-			logAttrs(ctx, slog.LevelInfo, "redismq: invoke wait cancelled or timed out", slog.String("reply_channel", replyChannel))
+	select {
+	case msg, ok := <-ch:
+		if !ok {
+			logAttrs(ctx, slog.LevelInfo, "redismq: invoke response subscription channel closed", slog.String("reply_channel", replyChannel))
 
 			return
 		}
+
+		res, ok := decodeInvokeResponse(ctx, msg.Payload, replyChannel)
+		if !ok {
+			return
+		}
+
+		responseChan <- res
+	case <-ctx.Done():
+		logAttrs(ctx, slog.LevelInfo, "redismq: invoke wait cancelled or timed out", slog.String("reply_channel", replyChannel))
 	}
 }
 
@@ -90,12 +95,10 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	invokeId := fmt.Sprintf("%s%d", GenerateRandomAlphanumeric(6), CurrentTimeMillis())
 	req.MessageId = invokeId
 
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
-		return &InvoiceResponse{Status: false, Response: err.Error()}
+		return failedInvokeResponse(err.Error())
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -106,17 +109,11 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 
 	data, err := client.Get(ctx, "MessageInvokeGroup:"+req.Group).Result()
 	if err != nil {
-		return &InvoiceResponse{
-			Status:   false,
-			Response: "Invoke get group:" + err.Error(),
-		}
+		return failedInvokeResponse("Invoke get group:" + err.Error())
 	}
 
 	if len(data) == 0 {
-		return &InvoiceResponse{
-			Status:   false,
-			Response: "Invoke Group Not Found:" + req.Group,
-		}
+		return failedInvokeResponse("Invoke Group Not Found:" + req.Group)
 	}
 
 	responseChan := make(chan *InvoiceResponse)
@@ -128,15 +125,11 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 		Body:  MarshalToJsonString(req),
 	})
 	if err != nil {
-		return &InvoiceResponse{
-			Status:   false,
-			Response: "Invoke error:" + err.Error(),
-		}
-	} else if !send {
-		return &InvoiceResponse{
-			Status:   false,
-			Response: "Invoke send failed",
-		}
+		return failedInvokeResponse("Invoke error:" + err.Error())
+	}
+
+	if !send {
+		return failedInvokeResponse("Invoke send failed")
 	}
 
 	logAttrs(ctx, slog.LevelInfo, "redismq: invoke request published", slog.Int64("cost_ms", time.Since(startTime).Milliseconds()), slog.String("invoke_method", req.Method), slog.String("invoke_group", req.Group), slog.String("message_id", req.MessageId))
@@ -147,10 +140,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 		select {
 		case <-ctx.Done():
 			return
-		case responseChan <- &InvoiceResponse{
-			Status:   false,
-			Response: "Timeout",
-		}:
+		case responseChan <- failedInvokeResponse("Timeout"):
 		}
 	}()
 
@@ -158,10 +148,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	case <-ctx.Done():
 		logAttrs(ctx, slog.LevelInfo, "redismq: invoke cancelled or timed out", slog.Int64("cost_ms", time.Since(startTime).Milliseconds()), slog.String("invoke_method", req.Method), slog.String("invoke_group", req.Group), slog.String("message_id", req.MessageId))
 
-		return &InvoiceResponse{
-			Status:   false,
-			Response: "Invoke context timeout",
-		}
+		return failedInvokeResponse("Invoke context timeout")
 	case response := <-responseChan:
 		logAttrs(ctx, slog.LevelInfo, "redismq: invoke response received", slog.Int64("cost_ms", time.Since(startTime).Milliseconds()), slog.String("invoke_method", req.Method), slog.String("invoke_group", req.Group), slog.String("message_id", req.MessageId))
 

@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/gogf/gf/v2/errors/gcode"
-	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -20,6 +18,12 @@ func (t MessageInvokeListener) GetTopic() string {
 
 func (t MessageInvokeListener) GetTag() string {
 	return TagInvoke
+}
+
+func publishInvokeResponse(ctx context.Context, client *redis.Client, replyChannel string, res *InvoiceResponse, status bool, response any) {
+	res.Status = status
+	res.Response = response
+	client.Publish(ctx, replyChannel, MarshalToJsonString(res))
 }
 
 func (t MessageInvokeListener) Consume(ctx context.Context, message *Message) Action {
@@ -52,14 +56,12 @@ func (t MessageInvokeListener) Consume(ctx context.Context, message *Message) Ac
 
 	res := &InvoiceResponse{}
 
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
 
 		return CommitMessage
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -71,40 +73,32 @@ func (t MessageInvokeListener) Consume(ctx context.Context, message *Message) Ac
 	replyChannel := getReplyChannel(req)
 
 	defer func() {
-		if exception := recover(); exception != nil {
-			if v, ok := exception.(error); ok && gerror.HasStack(v) {
-				err = v
-			} else {
-				err = gerror.NewCodef(gcode.CodeInternalPanic, "%+v", exception)
-			}
-
-			logAttrs(ctx, slog.LevelError, "redismq: invoke method panicked", causeAttr(err), stackAttr(2), slog.String("invoke_method", req.Method), slog.String("reply_channel", replyChannel))
-
-			res.Response = err.Error()
-			res.Status = false
-			client.Publish(ctx, replyChannel, MarshalToJsonString(res))
-
+		exception := recover()
+		if exception == nil {
 			return
 		}
+
+		err := panicError(exception)
+		logAttrs(ctx, slog.LevelError, "redismq: invoke method panicked", causeAttr(err), stackAttr(2), slog.String("invoke_method", req.Method), slog.String("reply_channel", replyChannel))
+
+		publishInvokeResponse(ctx, client, replyChannel, res, false, err.Error())
 	}()
 
-	if op, ok := invokeMap[req.Method]; ok {
-		// invoke method
-		response, err := op(ctx, req.Request)
-		if err != nil {
-			res.Response = err.Error()
-			res.Status = false
-			client.Publish(ctx, replyChannel, MarshalToJsonString(res))
-		} else {
-			res.Response = response
-			res.Status = true
-			client.Publish(ctx, replyChannel, MarshalToJsonString(res))
-		}
-	} else {
-		res.Response = "error: method not found"
-		res.Status = false
-		client.Publish(ctx, replyChannel, MarshalToJsonString(res))
+	op, ok := invokeMap[req.Method]
+	if !ok {
+		publishInvokeResponse(ctx, client, replyChannel, res, false, "error: method not found")
+
+		return CommitMessage
 	}
+
+	response, err := op(ctx, req.Request)
+	if err != nil {
+		publishInvokeResponse(ctx, client, replyChannel, res, false, err.Error())
+
+		return CommitMessage
+	}
+
+	publishInvokeResponse(ctx, client, replyChannel, res, true, response)
 
 	return CommitMessage
 }
@@ -121,9 +115,9 @@ func RegisterInternalListeners(ctx context.Context) {
 	logAttrs(ctx, slog.LevelInfo, "redismq: invoke listener registered")
 }
 
-var invokeMap = make(map[string]func(ctx context.Context, request interface{}) (response interface{}, err error))
+var invokeMap = make(map[string]func(ctx context.Context, request any) (response any, err error))
 
-func RegisterInvoke(ctx context.Context, methodName string, op func(ctx context.Context, request interface{}) (response interface{}, err error)) {
+func RegisterInvoke(ctx context.Context, methodName string, op func(ctx context.Context, request any) (response any, err error)) {
 	if len(methodName) <= 0 || op == nil {
 		logAttrs(ctx, slog.LevelWarn, "redismq: register invoke called with invalid method or nil handler", slog.String("invoke_method", methodName))
 	} else if _, ok := invokeMap[methodName]; ok {
@@ -135,14 +129,13 @@ func RegisterInvoke(ctx context.Context, methodName string, op func(ctx context.
 }
 
 func keepAliveMessageInvokeListener(ctx context.Context) {
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
 
 		return
 	}
 
-	client := redis.NewClient(options)
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {

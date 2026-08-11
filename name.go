@@ -8,21 +8,21 @@ import (
 )
 
 const (
-	REDIS_MQ_QUEUE_KEY_PREFIX            = "MQ_QUEUE_LIST_"
-	REDIS_MQ_BACKUP_QUEUE_KEY_PREFIX     = "MQ_BACKUP_QUEUE_LIST_"
-	STREAM_NAME                          = "STREAM_"
-	NAME_VERSION                         = "_V3"
-	REDIS_MQ_TRANSACTION_PRE_QUEUE_KEY   = "MQ_TRANSACTION_PRE_QUEUE_LIST_"
-	REDIS_MQ_DEATH_QUEUE_KEY             = "MQ_DEATH_QUEUE_LIST"
-	REDIS_MQ_TRANSACTION_DEATH_QUEUE_KEY = "MQ_TRANSACTION_DEATH_QUEUE_LIST_"
+	redisMQQueueKeyPrefix           = "MQ_QUEUE_LIST_"
+	redisMQBackupQueueKeyPrefix     = "MQ_BACKUP_QUEUE_LIST_"
+	streamName                      = "STREAM_"
+	nameVersion                     = "_V3"
+	redisMQTransactionPreQueueKey   = "MQ_TRANSACTION_PRE_QUEUE_LIST_"
+	redisMQDeathQueueKey            = "MQ_DEATH_QUEUE_LIST"
+	redisMQTransactionDeathQueueKey = "MQ_TRANSACTION_DEATH_QUEUE_LIST_"
 )
 
 func GetQueueName(topic string) string {
-	return fmt.Sprintf("%s%s%s%s", REDIS_MQ_QUEUE_KEY_PREFIX, STREAM_NAME, topic, NAME_VERSION)
+	return fmt.Sprintf("%s%s%s%s", redisMQQueueKeyPrefix, streamName, topic, nameVersion)
 }
 
 func getBackupQueueName(topic string) string {
-	return fmt.Sprintf("%s%s%s%s", REDIS_MQ_BACKUP_QUEUE_KEY_PREFIX, STREAM_NAME, topic, NAME_VERSION)
+	return fmt.Sprintf("%s%s%s%s", redisMQBackupQueueKeyPrefix, streamName, topic, nameVersion)
 }
 
 func GenerateUniqueNo(districtCode string) string {
@@ -32,11 +32,11 @@ func GenerateUniqueNo(districtCode string) string {
 }
 
 func GetTransactionPrepareQueueName(topic string) string {
-	return fmt.Sprintf("%s%s%s", REDIS_MQ_TRANSACTION_PRE_QUEUE_KEY, topic, NAME_VERSION)
+	return fmt.Sprintf("%s%s%s", redisMQTransactionPreQueueKey, topic, nameVersion)
 }
 
 func GetDeathQueueName() string {
-	return fmt.Sprintf("%s%sdeath_message%s", REDIS_MQ_DEATH_QUEUE_KEY, STREAM_NAME, NAME_VERSION)
+	return fmt.Sprintf("%s%sdeath_message%s", redisMQDeathQueueKey, streamName, nameVersion)
 }
 
 func GetMessageKey(topic string, tag string) string {
@@ -44,5 +44,5 @@ func GetMessageKey(topic string, tag string) string {
 }
 
 func getTransactionDeathQueueName() string {
-	return fmt.Sprintf("%s%s", REDIS_MQ_TRANSACTION_DEATH_QUEUE_KEY, NAME_VERSION)
+	return fmt.Sprintf("%s%s", redisMQTransactionDeathQueueKey, nameVersion)
 }

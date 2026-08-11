@@ -2,14 +2,11 @@ package go_redismq
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strconv"
 	"time"
 
-	"github.com/gogf/gf/v2/encoding/gjson"
-	"github.com/gogf/gf/v2/errors/gcode"
-	"github.com/gogf/gf/v2/errors/gerror"
-	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -21,13 +18,7 @@ func StartDelayBackgroundThread(ctx context.Context) {
 	go func() {
 		defer func() {
 			if exception := recover(); exception != nil {
-				var err error
-
-				if v, ok := exception.(error); ok && gerror.HasStack(v) {
-					err = v
-				} else {
-					err = gerror.NewCodef(gcode.CodeInternalPanic, "%+v", exception)
-				}
+				err := panicError(exception)
 
 				logAttrs(ctx, slog.LevelError, "redismq: delay background thread panic recovered", causeAttr(err), stackAttr(2))
 
@@ -50,14 +41,12 @@ func StartDelayBackgroundThread(ctx context.Context) {
 }
 
 func polling(ctx context.Context) {
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
 
 		return
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -79,13 +68,7 @@ func polling(ctx context.Context) {
 func pollingCore(ctx context.Context, key string) {
 	defer func() {
 		if exception := recover(); exception != nil {
-			var err error
-
-			if v, ok := exception.(error); ok && gerror.HasStack(v) {
-				err = v
-			} else {
-				err = gerror.NewCodef(gcode.CodeInternalPanic, "%+v", exception)
-			}
+			err := panicError(exception)
 
 			logAttrs(ctx, slog.LevelError, "redismq: delay queue polling panic recovered", causeAttr(err), stackAttr(2))
 
@@ -93,14 +76,12 @@ func pollingCore(ctx context.Context, key string) {
 		}
 	}()
 
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
 
 		return
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -111,7 +92,7 @@ func pollingCore(ctx context.Context, key string) {
 
 	result, err := client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
 		Min:    "0",
-		Max:    strconv.FormatInt(gtime.Now().Timestamp(), 10),
+		Max:    strconv.FormatInt(time.Now().Unix(), 10),
 		Offset: 0,
 		Count:  1,
 	}).Result()
@@ -124,37 +105,50 @@ func pollingCore(ctx context.Context, key string) {
 	}
 
 	for _, messageJson := range result {
-		var message *Message
-
-		err = gjson.Unmarshal([]byte(messageJson), &message)
-		if err != nil {
-			logAttrs(ctx, slog.LevelWarn, "redismq: delay queue message unmarshal failed", causeAttr(err))
-
-			continue
-		}
-
-		err = client.ZRem(ctx, key, messageJson).Err()
-		if err == nil {
-			message.StartDeliverTime = 0
-			message.MessageId = ""
-
-			_, sendErr := sendMessage(ctx, message, "DelayQueue")
-			if sendErr != nil {
-				logAttrs(ctx, slog.LevelWarn, "redismq: delay message removed but resend failed", append(messageAttrs(message), causeAttr(sendErr))...)
-			}
-		} else {
-			logAttrs(ctx, slog.LevelWarn, "redismq: delay queue message removal failed, message will be redelivered", append(messageAttrs(message), causeAttr(err))...)
-		}
+		republishDelayedMessage(ctx, client, key, messageJson)
 	}
 }
 
+func republishDelayedMessage(ctx context.Context, client *redis.Client, key string, messageJson string) {
+	message, err := decodeDelayedMessage(messageJson)
+	if err != nil {
+		logAttrs(ctx, slog.LevelWarn, "redismq: delay queue message unmarshal failed", causeAttr(err))
+
+		return
+	}
+
+	err = client.ZRem(ctx, key, messageJson).Err()
+	if err != nil {
+		logAttrs(ctx, slog.LevelWarn, "redismq: delay queue message removal failed, message will be redelivered", append(messageAttrs(message), causeAttr(err))...)
+
+		return
+	}
+
+	message.StartDeliverTime = 0
+	message.MessageId = ""
+
+	_, sendErr := sendMessage(ctx, message, "DelayQueue")
+	if sendErr != nil {
+		logAttrs(ctx, slog.LevelWarn, "redismq: delay message removed but resend failed", append(messageAttrs(message), causeAttr(sendErr))...)
+	}
+}
+
+func decodeDelayedMessage(messageJson string) (*Message, error) {
+	var message *Message
+
+	err := json.Unmarshal([]byte(messageJson), &message)
+	if err != nil {
+		return nil, err
+	}
+
+	return message, nil
+}
+
 func SendDelay(ctx context.Context, message *Message, delay int64) (bool, error) {
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		return false, err
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -165,7 +159,7 @@ func SendDelay(ctx context.Context, message *Message, delay int64) (bool, error)
 
 	stampTraceID(ctx, message)
 
-	messageJson, err := gjson.Marshal(message)
+	messageJson, err := json.Marshal(message)
 	if err != nil {
 		logAttrs(ctx, slog.LevelWarn, "redismq: delay message marshal failed", append(messageAttrs(message), causeAttr(err), slog.String("delay_queue", MqDelayQueueName))...)
 
@@ -173,7 +167,7 @@ func SendDelay(ctx context.Context, message *Message, delay int64) (bool, error)
 	}
 
 	jsonString := string(messageJson)
-	score := gtime.Now().Timestamp() + delay
+	score := time.Now().Unix() + delay
 
 	_, err = client.ZAdd(ctx, MqDelayQueueName, redis.Z{
 		Score:  float64(score),

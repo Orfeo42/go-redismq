@@ -1,37 +1,31 @@
 package go_redismq
 
 import (
-	"github.com/gogf/gf/v2/encoding/gjson"
-	"github.com/gogf/gf/v2/errors/gerror"
+	"encoding/json"
+	"errors"
 )
 
-func FormatToJsonString(target interface{}) string {
+var ErrJsonTargetNil = errors.New("redismq: target is nil")
+
+func FormatToJsonString(target any) string {
 	if target == nil {
 		return ""
 	}
 
-	encodeString, err := gjson.EncodeString(target)
+	encodeString, err := json.Marshal(target)
 	if err != nil {
 		return ""
 	}
 
-	return encodeString
+	return string(encodeString)
 }
 
-func FormatToGJson(target interface{}) *gjson.Json {
-	if target == nil {
-		return nil
-	}
-
-	return gjson.New(target)
-}
-
-func MarshalToJsonString(target interface{}) string {
+func MarshalToJsonString(target any) string {
 	if target == nil {
 		return ""
 	}
 
-	marshal, err := gjson.Marshal(target)
+	marshal, err := json.Marshal(target)
 	if err != nil {
 		return ""
 	}
@@ -39,12 +33,12 @@ func MarshalToJsonString(target interface{}) string {
 	return string(marshal)
 }
 
-func MarshalMetadataToJsonString(target interface{}) *string {
+func MarshalMetadataToJsonString(target any) *string {
 	if target == nil {
 		return nil
 	}
 
-	marshal, err := gjson.Marshal(target)
+	marshal, err := json.Marshal(target)
 	if err != nil {
 		return nil
 	}
@@ -52,12 +46,12 @@ func MarshalMetadataToJsonString(target interface{}) *string {
 	return String(string(marshal))
 }
 
-func UnmarshalFromJsonString(target string, one interface{}) error {
-	if len(target) > 0 {
-		return gjson.Unmarshal([]byte(target), &one)
-	} else {
-		return gerror.New("target is nil")
+func UnmarshalFromJsonString(target string, one any) error {
+	if len(target) == 0 {
+		return ErrJsonTargetNil
 	}
+
+	return json.Unmarshal([]byte(target), one)
 }
 
 // String returns a pointer to the string value passed in.

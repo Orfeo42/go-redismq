@@ -2,11 +2,11 @@ package test
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
 	goredismq "github.com/Orfeo42/go-redismq/v2"
-	"github.com/gogf/gf/v2/frame/g"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +26,7 @@ func (t TestListener) GetTag() string {
 
 func (t TestListener) Consume(ctx context.Context, message *goredismq.Message) goredismq.Action {
 	receiveCount = receiveCount + 1
-	g.Log().Infof(ctx, "Receive Message %d:%s", receiveCount, goredismq.MarshalToJsonString(message))
+	slog.InfoContext(ctx, "redismq: message received", slog.Int("receive_count", receiveCount), slog.String("message", goredismq.MarshalToJsonString(message)))
 
 	return goredismq.CommitMessage
 }

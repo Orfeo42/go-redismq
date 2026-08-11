@@ -25,7 +25,7 @@ func TestMethodInvoke(t *testing.T) {
 	goredismq.RegisterInternalListeners(ctx)
 	goredismq.StartRedisMqConsumer(ctx)
 
-	goredismq.RegisterInvoke(ctx, "TestInvoke", func(ctx context.Context, request interface{}) (response interface{}, err error) {
+	goredismq.RegisterInvoke(ctx, "TestInvoke", func(ctx context.Context, request any) (response any, err error) {
 		if request == "error" {
 			return nil, errors.New("error")
 		} else if request == "panic" {

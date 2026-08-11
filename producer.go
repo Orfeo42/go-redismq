@@ -2,11 +2,11 @@ package go_redismq
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
-	"github.com/gogf/gf/v2/encoding/gjson"
-	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -50,11 +50,11 @@ var (
 )
 
 func sendDelayMessage(ctx context.Context, message *Message) (bool, error) {
-	if message.StartDeliverTime-gtime.Now().Timestamp() <= 0 {
+	if message.StartDeliverTime-time.Now().Unix() <= 0 {
 		return false, ErrDeliverTimeInThePast
 	}
 
-	send, err := SendDelay(ctx, message, message.StartDeliverTime-gtime.Now().Timestamp())
+	send, err := SendDelay(ctx, message, message.StartDeliverTime-time.Now().Unix())
 	logAttrs(ctx, slog.LevelInfo, "redismq: delay message send result", append(messageAttrs(message), slog.Bool("sent", send))...)
 
 	if err != nil {
@@ -75,12 +75,10 @@ func sendMessage(ctx context.Context, message *Message, source string) (bool, er
 
 	message.SendTime = CurrentTimeMillis()
 
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		return false, err
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -112,12 +110,10 @@ func sendTransactionPrepareMessage(ctx context.Context, message *Message) (bool,
 	message.MessageId = GenerateUniqueNo(message.Topic)
 	message.SendTime = CurrentTimeMillis()
 
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		return false, err
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -128,7 +124,7 @@ func sendTransactionPrepareMessage(ctx context.Context, message *Message) (bool,
 
 	stampTraceID(ctx, message)
 
-	messageJson, err := gjson.Marshal(message)
+	messageJson, err := json.Marshal(message)
 
 	jsonString := string(messageJson)
 
@@ -158,12 +154,10 @@ func rollbackTransactionPrepareMessage(ctx context.Context, message *Message) (b
 }
 
 func delTransactionPrepareMessage(ctx context.Context, message *Message) (bool, error) {
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		return false, err
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
@@ -193,12 +187,10 @@ func commitTransactionPrepareMessage(ctx context.Context, message *Message) (boo
 	oldMessageId := message.MessageId
 	message.MessageId = ""
 
-	options, err := GetRedisConfig()
+	client, err := newRedisClient()
 	if err != nil {
 		return false, err
 	}
-
-	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()

@@ -22,9 +22,9 @@ func TestStampTraceIDRoundTrip(t *testing.T) {
 
 		args := message.toStreamAddArgsValues("stream")
 
-		values, ok := args.Values.(map[string]interface{})
+		values, ok := args.Values.(map[string]any)
 		if !ok {
-			t.Fatalf("expected args.Values to be map[string]interface{}, got %T", args.Values)
+			t.Fatalf("expected args.Values to be map[string]any, got %T", args.Values)
 		}
 
 		fresh := &Message{}

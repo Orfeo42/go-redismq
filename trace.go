@@ -22,7 +22,7 @@ func (message *Message) traceID() string {
 
 func (message *Message) setTraceID(traceID string) {
 	if message.CustomData == nil {
-		message.CustomData = make(map[string]interface{})
+		message.CustomData = make(map[string]any)
 	}
 
 	message.CustomData[traceIDKey] = traceID
