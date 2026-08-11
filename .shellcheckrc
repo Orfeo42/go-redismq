@@ -1,0 +1,14 @@
+enable=all
+
+external-sources=true
+# `source=` paths are written repo-root-relative so they also resolve when an
+# editor pipes the file in on stdin (no SCRIPTDIR to anchor against).
+source-path=SCRIPTDIR/..
+source-path=SCRIPTDIR
+
+# Guarded control flow: a function called in an `if`/`!` condition intentionally
+# disables `set -e` because the branch itself handles the failure.
+disable=SC2310,SC2311
+# Fires on every substitution already guarded with `|| true` or whose failure is
+# the condition under test.
+disable=SC2312

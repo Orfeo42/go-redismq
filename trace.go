@@ -1,16 +1,53 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
+	"sync"
 
 	"github.com/google/uuid"
 )
 
 const traceIDKey = "traceId"
 
-var TraceIDFromContext = func(ctx context.Context) string { return "" }
+var (
+	traceMu            sync.RWMutex
+	traceIDFromContext = func(ctx context.Context) string { return "" }
+	traceIDToContext   = func(ctx context.Context, traceID string) context.Context { return ctx }
+)
 
-var TraceIDToContext = func(ctx context.Context, traceID string) context.Context { return ctx }
+func SetTraceIDFromContext(fn func(ctx context.Context) string) {
+	if fn == nil {
+		return
+	}
+
+	traceMu.Lock()
+	traceIDFromContext = fn
+	traceMu.Unlock()
+}
+
+func SetTraceIDToContext(fn func(ctx context.Context, traceID string) context.Context) {
+	if fn == nil {
+		return
+	}
+
+	traceMu.Lock()
+	traceIDToContext = fn
+	traceMu.Unlock()
+}
+
+func getTraceIDFromContext() func(ctx context.Context) string {
+	traceMu.RLock()
+	defer traceMu.RUnlock()
+
+	return traceIDFromContext
+}
+
+func getTraceIDToContext() func(ctx context.Context, traceID string) context.Context {
+	traceMu.RLock()
+	defer traceMu.RUnlock()
+
+	return traceIDToContext
+}
 
 func (message *Message) traceID() string {
 	if value, ok := message.CustomData[traceIDKey].(string); ok {
@@ -33,7 +70,7 @@ func stampTraceID(ctx context.Context, message *Message) {
 		return
 	}
 
-	traceID := TraceIDFromContext(ctx)
+	traceID := getTraceIDFromContext()(ctx)
 	if traceID == "" {
 		return
 	}
@@ -48,5 +85,5 @@ func consumeContext(ctx context.Context, message *Message) context.Context {
 		message.setTraceID(traceID)
 	}
 
-	return TraceIDToContext(ctx, traceID)
+	return getTraceIDToContext()(ctx, traceID)
 }

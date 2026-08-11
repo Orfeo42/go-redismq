@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
@@ -6,12 +6,31 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/Orfeo42/go-redismq/v3/internal/streamname"
 )
 
-var consumerName = ""
+var (
+	consumerNameMu sync.RWMutex
+	consumerName   = ""
+)
+
+func setConsumerName(name string) {
+	consumerNameMu.Lock()
+	consumerName = name
+	consumerNameMu.Unlock()
+}
+
+func getConsumerName() string {
+	consumerNameMu.RLock()
+	defer consumerNameMu.RUnlock()
+
+	return consumerName
+}
 
 const (
 	transactionDeathAfter    = 1000 * 60 * 60 * 8
@@ -23,7 +42,7 @@ func StartRedisMqConsumer(ctx context.Context) {
 	go func() {
 		innerSettingConsumerName(ctx)
 
-		if len(consumerName) == 0 {
+		if len(getConsumerName()) == 0 {
 			logAttrs(ctx, slog.LevelError, "redismq: consumer name invalid, startup aborted")
 
 			return
@@ -32,7 +51,7 @@ func StartRedisMqConsumer(ctx context.Context) {
 		StartDelayBackgroundThread(ctx)
 		logAttrs(ctx, slog.LevelInfo, "redismq: delay background thread started")
 
-		deathQueueName := GetDeathQueueName()
+		deathQueueName := streamname.DeathQueue()
 		createStreamGroup(ctx, deathQueueName, "death_message")
 		logAttrs(ctx, slog.LevelInfo, "redismq: death queue initialized", slog.String("stream", deathQueueName))
 		innerLoadConsumer(ctx)
@@ -81,7 +100,7 @@ func resolveConsumerNameFromInterface(ctx context.Context, face net.Interface) {
 		}
 
 		logAttrs(ctx, slog.LevelInfo, "redismq: consumer name resolved from ipv4 address", slog.String("consumer_name", ip.String()))
-		consumerName = ip.String()
+		setConsumerName(ip.String())
 	}
 }
 
@@ -120,17 +139,19 @@ func tryCreateGroup(ctx context.Context, queueName string, topic string) {
 		Body:  "test",
 	}
 
+	grp := getGroup()
+
 	_, err = client.XAdd(ctx, message.toStreamAddArgsValues(queueName)).Result()
 	if err != nil {
 		logAttrs(ctx, slog.LevelInfo, "redismq: group setup probe message failed, group may already exist",
-			slog.String("stream", queueName), slog.String("consumer_group", Group), slog.String("topic", topic), causeAttr(err))
+			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic), causeAttr(err))
 	}
 
 	found := false
 
 	groups, _ := client.XInfoGroups(ctx, queueName).Result()
-	for _, group := range groups {
-		if group.Name == Group {
+	for _, g := range groups {
+		if g.Name == grp {
 			found = true
 		}
 	}
@@ -139,15 +160,15 @@ func tryCreateGroup(ctx context.Context, queueName string, topic string) {
 		return
 	}
 
-	if err := client.XGroupCreateMkStream(ctx, queueName, Group, "$").Err(); err != nil {
+	if err := client.XGroupCreateMkStream(ctx, queueName, grp, "$").Err(); err != nil {
 		logAttrs(ctx, slog.LevelInfo, "redismq: create consumer group failed, group likely exists",
-			slog.String("stream", queueName), slog.String("consumer_group", Group), slog.String("topic", topic), causeAttr(err))
+			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic), causeAttr(err))
 
 		return
 	}
 
 	logAttrs(ctx, slog.LevelInfo, "redismq: consumer group initialized",
-		slog.String("stream", queueName), slog.String("consumer_group", Group), slog.String("topic", topic))
+		slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic))
 }
 
 func tryCreateConsumer(ctx context.Context, queueName string) {
@@ -174,27 +195,30 @@ func tryCreateConsumer(ctx context.Context, queueName string) {
 		}
 	}(client)
 
-	if _, err = client.XGroupCreateConsumer(ctx, queueName, Group, consumerName).Result(); err != nil {
+	grp := getGroup()
+	name := getConsumerName()
+
+	if _, err = client.XGroupCreateConsumer(ctx, queueName, grp, name).Result(); err != nil {
 		logAttrs(ctx, slog.LevelInfo, "redismq: create consumer failed, consumer likely exists",
-			slog.String("stream", queueName), slog.String("consumer_group", Group), slog.String("consumer_name", consumerName), causeAttr(err))
+			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("consumer_name", name), causeAttr(err))
 
 		return
 	}
 
 	logAttrs(ctx, slog.LevelInfo, "redismq: consumer initialized",
-		slog.String("stream", queueName), slog.String("consumer_group", Group), slog.String("consumer_name", consumerName))
+		slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("consumer_name", name))
 }
 
 func innerLoadConsumer(ctx context.Context) {
-	for _, topic := range Topics {
+	for _, topic := range getTopics() {
 		blockConsumerTopic(ctx, topic)
 	}
 }
 
 func blockConsumerTopic(ctx context.Context, topic string) {
-	createStreamGroup(ctx, GetQueueName(topic), topic)
+	createStreamGroup(ctx, streamname.Queue(topic), topic)
 
-	createStreamGroup(ctx, getBackupQueueName(topic), topic)
+	createStreamGroup(ctx, streamname.BackupQueue(topic), topic)
 	go loopConsumer(ctx, topic)
 	go loopTransactionChecker(ctx, topic)
 }
@@ -242,7 +266,7 @@ func customerIteration(ctx context.Context, client *redis.Client, topic string) 
 		count++
 	}
 
-	if count == len(Topics) {
+	if count == topicCount() {
 		time.Sleep(1 * time.Second)
 	}
 }
@@ -303,9 +327,9 @@ func loopTransactionCheckerIteration(ctx context.Context, topic string) {
 func checkTransactionPrepareMessage(ctx context.Context, topic string, message *Message) {
 	msgCtx := consumeContext(ctx, message)
 
-	ck := Checkers()[GetMessageKey(message.Topic, message.Tag)]
+	ck := getCheckerFor(message.Topic, message.Tag)
 	if ck == nil {
-		if (CurrentTimeMillis() - message.SendTime) > transactionRollbackAfter {
+		if (currentTimeMillis() - message.SendTime) > transactionRollbackAfter {
 			//After 7 Days, Transaction Rollback
 			_, _ = rollbackTransactionPrepareMessage(msgCtx, message)
 		}
@@ -320,7 +344,7 @@ func checkTransactionPrepareMessage(ctx context.Context, topic string, message *
 		_, _ = rollbackTransactionPrepareMessage(msgCtx, message)
 	default:
 		//todo mark save send time, max retry times limit 50
-		if (CurrentTimeMillis() - message.SendTime) > transactionDeathAfter {
+		if (currentTimeMillis() - message.SendTime) > transactionDeathAfter {
 			//After 8 Hours, Transaction Message Drop To Death
 			putMessageToTransactionDeathQueue(msgCtx, topic, message)
 		}
@@ -332,7 +356,7 @@ func getConsumer(message *Message) IMessageListener {
 		return nil
 	}
 
-	return Listeners()[GetMessageKey(message.Topic, message.Tag)]
+	return getListenerFor(message.Topic, message.Tag)
 }
 
 func dropMessage(ctx context.Context, message *Message) {
@@ -384,7 +408,7 @@ func messageCost(message *Message) (cost int64, expired bool) {
 		return 0, false
 	}
 
-	elapsed := CurrentTimeMillis() - message.SendTime
+	elapsed := currentTimeMillis() - message.SendTime
 
 	return elapsed, elapsed > messageExpireAfter
 }
@@ -467,9 +491,9 @@ func messageAck(ctx context.Context, message *Message) {
 		}
 	}(client)
 
-	streamName := GetQueueName(message.Topic)
+	streamName := streamname.Queue(message.Topic)
 
-	ackResult, err := client.XAck(ctx, streamName, Group, message.MessageId).Result()
+	ackResult, err := client.XAck(ctx, streamName, getGroup(), message.MessageId).Result()
 	if err != nil {
 		logAttrs(ctx, slog.LevelWarn, "redismq: message ack failed", append(messageAttrs(message), causeAttr(err))...)
 
@@ -491,11 +515,11 @@ func blockReceiveConsumerMessage(ctx context.Context, client *redis.Client, topi
 		}
 	}()
 
-	streamName := GetQueueName(topic)
+	streamName := streamname.Queue(topic)
 
 	result, err := client.XReadGroup(ctx, &redis.XReadGroupArgs{
-		Group:    Group,
-		Consumer: consumerName,
+		Group:    getGroup(),
+		Consumer: getConsumerName(),
 		Streams:  []string{streamName, ">"},
 		Count:    1,
 		Block:    60 * time.Second,
@@ -526,7 +550,7 @@ func blockReceiveConsumerMessage(ctx context.Context, client *redis.Client, topi
 }
 
 func pushTaskToResumeLater(ctx context.Context, message *Message) bool {
-	ResumeTimesMax := MaxInt(40, message.ReconsumeMax)
+	ResumeTimesMax := maxInt(40, message.ReconsumeMax)
 	logAttrs(ctx, slog.LevelInfo, "redismq: message pushed to resume later",
 		append(messageAttrs(message), slog.Int("reconsume_limit", ResumeTimesMax))...)
 
@@ -536,7 +560,7 @@ func pushTaskToResumeLater(ctx context.Context, message *Message) bool {
 
 	message.ReconsumeTimes = message.ReconsumeTimes + 1
 
-	var appendTime = MaxInt64(60, int64(60*message.ReconsumeTimes))
+	var appendTime = maxInt64(60, int64(60*message.ReconsumeTimes))
 
 	message.StartDeliverTime = time.Now().Unix() + appendTime // resume every min till end
 
@@ -565,7 +589,7 @@ func putMessageToDeathQueue(ctx context.Context, message *Message) bool {
 		}
 	}(client)
 
-	streamMessageId, err := client.XAdd(ctx, message.toStreamAddArgsValues(GetDeathQueueName())).Result()
+	streamMessageId, err := client.XAdd(ctx, message.toStreamAddArgsValues(streamname.DeathQueue())).Result()
 	if err != nil {
 		logAttrs(ctx, slog.LevelError, "redismq: push message to death queue failed", append(messageAttrs(message), causeAttr(err))...)
 
@@ -573,7 +597,7 @@ func putMessageToDeathQueue(ctx context.Context, message *Message) bool {
 	}
 
 	logAttrs(ctx, slog.LevelInfo, "redismq: message pushed to death queue",
-		append(messageAttrs(message), slog.String("death_message_id", streamMessageId), slog.String("stream", GetDeathQueueName()))...)
+		append(messageAttrs(message), slog.String("death_message_id", streamMessageId), slog.String("stream", streamname.DeathQueue()))...)
 
 	return true
 }
@@ -594,8 +618,8 @@ func putMessageToTransactionDeathQueue(ctx context.Context, topic string, messag
 	}(client)
 
 	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.LRem(ctx, GetTransactionPrepareQueueName(topic), 1, message.MessageId)
-		pipe.RPush(ctx, getTransactionDeathQueueName(), message.MessageId)
+		pipe.LRem(ctx, streamname.TransactionPrepareQueue(topic), 1, message.MessageId)
+		pipe.RPush(ctx, streamname.TransactionDeathQueue(), message.MessageId)
 
 		return nil
 	})
@@ -623,7 +647,7 @@ func fetchTransactionPrepareMessagesForChecker(ctx context.Context, topic string
 		}
 	}(client)
 
-	result, err := client.LRange(ctx, GetTransactionPrepareQueueName(topic), 0, -1).Result()
+	result, err := client.LRange(ctx, streamname.TransactionPrepareQueue(topic), 0, -1).Result()
 	if err != nil {
 		return []*Message{}
 	}
@@ -708,13 +732,13 @@ func startScheduleTrimStreamIteration(ctx context.Context, client *redis.Client)
 		}
 	}()
 
-	for _, topic := range Topics {
-		queueName := GetQueueName(topic)
+	for _, topic := range getTopics() {
+		queueName := streamname.Queue(topic)
 		client.XTrimMaxLen(ctx, queueName, int64(maxLen))
-		queueName = getBackupQueueName(topic)
+		queueName = streamname.BackupQueue(topic)
 		client.XTrimMaxLen(ctx, queueName, int64(maxLen))
 	}
 
-	queueName := GetDeathQueueName()
+	queueName := streamname.DeathQueue()
 	client.XTrimMaxLen(ctx, queueName, int64(maxLen))
 }

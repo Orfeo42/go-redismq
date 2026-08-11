@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 import (
 	"errors"
@@ -6,14 +6,14 @@ import (
 )
 
 func snapshotConfig() (string, string, string, int) {
-	return Group, addr, password, database
+	return group, addr, password, database
 }
 
-func restoreConfig(t *testing.T, group, savedAddr, savedPassword string, savedDatabase int) {
+func restoreConfig(t *testing.T, savedGroup, savedAddr, savedPassword string, savedDatabase int) {
 	t.Helper()
 
 	t.Cleanup(func() {
-		Group = group
+		group = savedGroup
 		addr = savedAddr
 		password = savedPassword
 		database = savedDatabase
@@ -71,7 +71,7 @@ func TestRegisterRedisMqConfig(t *testing.T) {
 			t.Fatalf("expected nil error, got %v", err)
 		}
 
-		options, err := GetRedisConfig()
+		options, err := getRedisConfig()
 		if err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
@@ -108,7 +108,7 @@ func TestRegisterRedisMqConfig(t *testing.T) {
 			t.Fatalf("expected ErrConfigNil, got %v", err)
 		}
 
-		options, err := GetRedisConfig()
+		options, err := getRedisConfig()
 		if err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
@@ -134,7 +134,7 @@ func TestGetRedisConfig(t *testing.T) {
 
 		addr = ""
 
-		_, err := GetRedisConfig()
+		_, err := getRedisConfig()
 		if !errors.Is(err, ErrConfigNotSet) {
 			t.Fatalf("expected ErrConfigNotSet, got %v", err)
 		}

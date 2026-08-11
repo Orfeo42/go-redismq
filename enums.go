@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 type Action int
 
@@ -44,7 +44,3 @@ type MQTopicEnum struct {
 	Tag         string
 	Description string
 }
-
-var (
-	TopicBlank = MQTopicEnum{"blank", "blank", "redis blank test message"}
-)

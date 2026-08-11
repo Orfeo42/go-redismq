@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
@@ -8,26 +8,29 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/Orfeo42/go-redismq/v3/internal/idgen"
+	"github.com/Orfeo42/go-redismq/v3/internal/jsonutil"
 )
 
-type InvoiceRequest struct {
+type InvokeRequest struct {
 	MessageId string `json:"messageId"`
 	Group     string `json:"group"`
 	Method    string `json:"method"`
 	Request   any    `json:"request"`
 }
 
-type InvoiceResponse struct {
+type InvokeResponse struct {
 	Status   bool `json:"status"`
 	Response any  `json:"response"`
 }
 
-func failedInvokeResponse(response string) *InvoiceResponse {
-	return &InvoiceResponse{Status: false, Response: response}
+func failedInvokeResponse(response string) *InvokeResponse {
+	return &InvokeResponse{Status: false, Response: response}
 }
 
-func decodeInvokeResponse(ctx context.Context, payload string, replyChannel string) (*InvoiceResponse, bool) {
-	var res *InvoiceResponse
+func decodeInvokeResponse(ctx context.Context, payload string, replyChannel string) (*InvokeResponse, bool) {
+	var res *InvokeResponse
 
 	err := json.Unmarshal([]byte(payload), &res)
 	if err != nil {
@@ -39,7 +42,7 @@ func decodeInvokeResponse(ctx context.Context, payload string, replyChannel stri
 	return res, true
 }
 
-func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan chan *InvoiceResponse) {
+func listenForResponse(ctx context.Context, req *InvokeRequest, responseChan chan *InvokeResponse) {
 	client, err := newRedisClient()
 	if err != nil {
 		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
@@ -85,14 +88,14 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 	}
 }
 
-func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *InvoiceResponse {
+func Invoke(ctx context.Context, req *InvokeRequest, timeoutSeconds int) *InvokeResponse {
 	startTime := time.Now()
 
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 15
 	}
 
-	invokeId := fmt.Sprintf("%s%d", GenerateRandomAlphanumeric(6), CurrentTimeMillis())
+	invokeId := fmt.Sprintf("%s%d", idgen.RandomAlphanumeric(6), currentTimeMillis())
 	req.MessageId = invokeId
 
 	client, err := newRedisClient()
@@ -116,13 +119,13 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 		return failedInvokeResponse("Invoke Group Not Found:" + req.Group)
 	}
 
-	responseChan := make(chan *InvoiceResponse)
+	responseChan := make(chan *InvokeResponse)
 	go listenForResponse(ctx, req, responseChan)
 
 	send, err := Send(ctx, &Message{
 		Topic: TopicInternal,
 		Tag:   TagInvoke,
-		Body:  MarshalToJsonString(req),
+		Body:  jsonutil.MarshalString(req),
 	})
 	if err != nil {
 		return failedInvokeResponse("Invoke error:" + err.Error())

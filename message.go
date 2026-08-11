@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
@@ -24,7 +24,7 @@ type Message struct {
 	ConsumerDelayMilliSeconds int            `dc:"Consumer Delay Milliseconds"  json:"consumerDelayMilliSeconds"`
 }
 
-type MessageMetaData struct {
+type messageMetaData struct {
 	StartDeliverTime          int64          `dc:"Send Time,0-No Delay, Second" json:"startDeliverTime"`
 	ReconsumeTimes            int            `dc:"Reconsume Count"              json:"reconsumeTimes"`
 	ReconsumeMax              int            `dc:"Reconsume Max Count"          json:"reconsumeMax"`
@@ -39,7 +39,7 @@ func NewRedisMQMessage(topicWrapper MQTopicEnum, body string) *Message {
 		Topic:    topicWrapper.Topic,
 		Tag:      topicWrapper.Tag,
 		Body:     body,
-		SendTime: CurrentTimeMillis(),
+		SendTime: currentTimeMillis(),
 	}
 }
 
@@ -76,13 +76,13 @@ func (message *Message) toStreamAddArgsValues(stream string) *redis.XAddArgs {
 		message.ConsumerDelayMilliSeconds = DefaultConsumerDelayMilliSeconds
 	}
 
-	metadata := MessageMetaData{
+	metadata := messageMetaData{
 		StartDeliverTime:          message.StartDeliverTime,
 		ReconsumeTimes:            message.ReconsumeTimes,
 		CustomData:                message.CustomData,
 		Key:                       message.Key,
 		ConsumerDelayMilliSeconds: message.ConsumerDelayMilliSeconds,
-		SendTime:                  CurrentTimeMillis(),
+		SendTime:                  currentTimeMillis(),
 	}
 	metaJson, _ := json.Marshal(metadata)
 

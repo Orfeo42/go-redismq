@@ -1,30 +1,43 @@
-# Compiled Object files, Static and Dynamic libs (Shared Objects)
-*.o
-*.a
-*.so
+.buildpath
+.hgignore.swp
+.project
+.orig
+.swp
+.idea/
+.settings/
+bin/
+**/.DS_Store
+gf
+main
+main.exe
+output/
+manifest/output/
+temp/
+temp.yaml
+bin
+manifest/config/config.yaml.template
+manifest/config/config.yaml
+**/**/*.log
+cache
+.cache/
+config.yaml
+config.yaml.backup
+publish_dev.sh
+publish_main.sh
+squash_opensource.sh
+test/out/*.*
+__debug_bin*
 
-# Folders
-_obj
-_test
+**/.env
+**/.env.*
 
-# Architecture specific extensions/prefixes
-*.[568vq]
-[568vq].out
+**/*.png
 
-*.cgo1.go
-*.cgo2.c
-_cgo_defun.c
-_cgo_gotypes.go
-_cgo_export.*
+unibee
 
-_testmain.go
+**/.agent
+.claude/*
+!.claude/skills/
 
-*.exe
-*.test
-*.prof
-.idea
-
-.vscode
-.golangci.yml
-
-docs/
+**/.docs/
+.ai-docs/

@@ -1,15 +1,19 @@
-package go_redismq
+package redismq
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/redis/go-redis/v9"
 )
 
-var Group = "GID_Default"
-var addr = ""
-var password = ""
-var database = 0
+var (
+	configMu sync.RWMutex
+	group    = "GID_Default"
+	addr     = ""
+	password = ""
+	database = 0
+)
 
 var (
 	ErrConfigNil        = errors.New("redismq: config is nil")
@@ -38,7 +42,10 @@ func RegisterRedisMqConfig(one *RedisMqConfig) error {
 		return ErrConfigGroupBlank
 	}
 
-	Group = one.Group
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	group = one.Group
 	addr = one.Addr
 	password = one.Password
 
@@ -49,7 +56,10 @@ func RegisterRedisMqConfig(one *RedisMqConfig) error {
 	return nil
 }
 
-func GetRedisConfig() (*redis.Options, error) {
+func getRedisConfig() (*redis.Options, error) {
+	configMu.RLock()
+	defer configMu.RUnlock()
+
 	if len(addr) == 0 {
 		return nil, ErrConfigNotSet
 	}
@@ -59,4 +69,11 @@ func GetRedisConfig() (*redis.Options, error) {
 		Password: password,
 		DB:       database,
 	}, nil
+}
+
+func getGroup() string {
+	configMu.RLock()
+	defer configMu.RUnlock()
+
+	return group
 }

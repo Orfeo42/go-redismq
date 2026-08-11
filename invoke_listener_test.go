@@ -1,34 +1,39 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
 	"testing"
+
+	"github.com/Orfeo42/go-redismq/v3/internal/streamname"
 )
 
 func TestRegisterInternalListeners(t *testing.T) {
 	t.Run("registers the invoke listener under its message key", func(t *testing.T) {
+		listenerMu.Lock()
 		originalListeners := listeners
-		originalTopics := Topics
+		originalTopics := topics
+		listeners = map[string]IMessageListener{}
+		topics = nil
+		listenerMu.Unlock()
 
 		t.Cleanup(func() {
+			listenerMu.Lock()
 			listeners = originalListeners
-			Topics = originalTopics
+			topics = originalTopics
+			listenerMu.Unlock()
 		})
-
-		listeners = nil
-		Topics = nil
 
 		RegisterInternalListeners(context.Background())
 
-		key := GetMessageKey(TopicInternal, TagInvoke)
+		key := streamname.MessageKey(TopicInternal, TagInvoke)
 
-		registered, ok := Listeners()[key]
+		registered, ok := snapshotListeners()[key]
 		if !ok {
 			t.Fatalf("expected listener registered under key %q", key)
 		}
 
-		if _, ok := registered.(*MessageInvokeListener); !ok {
-			t.Fatalf("expected registered listener to be *MessageInvokeListener, got %T", registered)
+		if _, ok := registered.(*messageInvokeListener); !ok {
+			t.Fatalf("expected registered listener to be *messageInvokeListener, got %T", registered)
 		}
 	})
 }

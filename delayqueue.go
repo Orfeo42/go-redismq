@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	MqDelayQueueName = "MQ_DELAY_QUEUE_SET"
+	mqDelayQueueName = "MQ_DELAY_QUEUE_SET"
 )
 
 func StartDelayBackgroundThread(ctx context.Context) {
@@ -55,7 +55,7 @@ func polling(ctx context.Context) {
 		}
 	}(client)
 
-	result, err := client.Keys(ctx, MqDelayQueueName).Result()
+	result, err := client.Keys(ctx, mqDelayQueueName).Result()
 	if err != nil {
 		return
 	}
@@ -161,7 +161,7 @@ func SendDelay(ctx context.Context, message *Message, delay int64) (bool, error)
 
 	messageJson, err := json.Marshal(message)
 	if err != nil {
-		logAttrs(ctx, slog.LevelWarn, "redismq: delay message marshal failed", append(messageAttrs(message), causeAttr(err), slog.String("delay_queue", MqDelayQueueName))...)
+		logAttrs(ctx, slog.LevelWarn, "redismq: delay message marshal failed", append(messageAttrs(message), causeAttr(err), slog.String("delay_queue", mqDelayQueueName))...)
 
 		return false, err
 	}
@@ -169,12 +169,12 @@ func SendDelay(ctx context.Context, message *Message, delay int64) (bool, error)
 	jsonString := string(messageJson)
 	score := time.Now().Unix() + delay
 
-	_, err = client.ZAdd(ctx, MqDelayQueueName, redis.Z{
+	_, err = client.ZAdd(ctx, mqDelayQueueName, redis.Z{
 		Score:  float64(score),
 		Member: jsonString,
 	}).Result()
 	if err != nil {
-		logAttrs(ctx, slog.LevelWarn, "redismq: delay message zadd failed", append(messageAttrs(message), causeAttr(err), slog.String("delay_queue", MqDelayQueueName))...)
+		logAttrs(ctx, slog.LevelWarn, "redismq: delay message zadd failed", append(messageAttrs(message), causeAttr(err), slog.String("delay_queue", mqDelayQueueName))...)
 
 		return false, err
 	}

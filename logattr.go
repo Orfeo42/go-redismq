@@ -1,10 +1,12 @@
-package go_redismq
+package redismq
 
 import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"runtime"
+
+	"github.com/Orfeo42/go-redismq/v3/internal/streamname"
 )
 
 func messageAttrs(m *Message) []slog.Attr {
@@ -34,8 +36,8 @@ func messageAttrs(m *Message) []slog.Attr {
 func topicAttrs(topic string) []slog.Attr {
 	return []slog.Attr{
 		slog.String("topic", topic),
-		slog.String("consumer_group", Group),
-		slog.String("stream", GetQueueName(topic)),
+		slog.String("consumer_group", getGroup()),
+		slog.String("stream", streamname.Queue(topic)),
 	}
 }
 

@@ -1,9 +1,12 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+
+	"github.com/Orfeo42/go-redismq/v3/internal/streamname"
 )
 
 type IMessageListener interface {
@@ -12,15 +15,48 @@ type IMessageListener interface {
 	Consume(ctx context.Context, message *Message) Action
 }
 
-var listeners map[string]IMessageListener
-var Topics []string
+var (
+	listenerMu sync.RWMutex
+	listeners  = map[string]IMessageListener{}
+	topics     = make([]string, 0, 100)
+)
 
-func Listeners() map[string]IMessageListener {
-	if listeners == nil {
-		listeners = make(map[string]IMessageListener)
+func snapshotListeners() map[string]IMessageListener {
+	listenerMu.RLock()
+	defer listenerMu.RUnlock()
+
+	out := make(map[string]IMessageListener, len(listeners))
+	for k, v := range listeners {
+		out[k] = v
 	}
 
-	return listeners
+	return out
+}
+
+func getListenerFor(topic string, tag string) IMessageListener {
+	messageKey := streamname.MessageKey(topic, tag)
+
+	listenerMu.RLock()
+	defer listenerMu.RUnlock()
+
+	return listeners[messageKey]
+}
+
+func getTopics() []string {
+	listenerMu.RLock()
+	defer listenerMu.RUnlock()
+
+	out := make([]string, len(topics))
+	copy(out, topics)
+
+	return out
+}
+
+func topicCount() int {
+	listenerMu.RLock()
+	defer listenerMu.RUnlock()
+
+	return len(topics)
 }
 
 func isValidTopic(topic string) bool {
@@ -32,12 +68,11 @@ func RegisterListener(ctx context.Context, i IMessageListener) {
 		return
 	}
 
-	if Topics == nil {
-		Topics = make([]string, 0, 100)
-	}
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
 
-	if len(Topics) > 60 {
-		logAttrs(ctx, slog.LevelWarn, "redismq: too many topics registered, merge listeners", slog.Int("topic_count", len(Topics)))
+	if len(topics) > 60 {
+		logAttrs(ctx, slog.LevelWarn, "redismq: too many topics registered, merge listeners", slog.Int("topic_count", len(topics)))
 
 		return
 	}
@@ -48,15 +83,15 @@ func RegisterListener(ctx context.Context, i IMessageListener) {
 		return
 	}
 
-	messageKey := GetMessageKey(i.GetTopic(), i.GetTag())
+	messageKey := streamname.MessageKey(i.GetTopic(), i.GetTag())
 
-	if Listeners()[messageKey] != nil {
+	if listeners[messageKey] != nil {
 		logAttrs(ctx, slog.LevelWarn, "redismq: duplicate listener for message key, listener dropped", slog.String("message_key", messageKey), slog.String("listener_type", fmt.Sprintf("%T", i)))
 
 		return
 	}
 
-	Listeners()[messageKey] = i
-	Topics = append(Topics, i.GetTopic())
+	listeners[messageKey] = i
+	topics = append(topics, i.GetTopic())
 	logAttrs(ctx, slog.LevelInfo, "redismq: listener registered", slog.String("message_key", messageKey), slog.String("listener_type", fmt.Sprintf("%T", i)))
 }

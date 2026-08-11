@@ -1,25 +1,17 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
-)
 
-const (
-	colorReset  = "\033[0m"
-	colorRed    = "\033[31m"
-	colorYellow = "\033[33m"
-	colorBlue   = "\033[34m"
-	colorGray   = "\033[90m"
+	"github.com/Orfeo42/go-redismq/v3/internal/logging"
 )
 
 type Logger interface {
@@ -31,125 +23,6 @@ type Logger interface {
 
 type AttrLogger interface {
 	LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr)
-}
-
-type ColorHandler struct {
-	handler    slog.Handler
-	w          io.Writer
-	opts       *slog.HandlerOptions
-	goidCache  map[uint64]string
-	cacheMutex sync.RWMutex
-}
-
-func NewColorHandler(w io.Writer, opts *slog.HandlerOptions) *ColorHandler {
-	if opts == nil {
-		opts = &slog.HandlerOptions{}
-	}
-
-	return &ColorHandler{
-		handler:   slog.NewTextHandler(w, opts),
-		w:         w,
-		opts:      opts,
-		goidCache: make(map[uint64]string),
-	}
-}
-
-func (h *ColorHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.handler.Enabled(ctx, level)
-}
-
-func (h *ColorHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &ColorHandler{
-		handler:   h.handler.WithAttrs(attrs),
-		w:         h.w,
-		opts:      h.opts,
-		goidCache: h.goidCache,
-	}
-}
-
-func (h *ColorHandler) WithGroup(name string) slog.Handler {
-	return &ColorHandler{
-		handler:   h.handler.WithGroup(name),
-		w:         h.w,
-		opts:      h.opts,
-		goidCache: h.goidCache,
-	}
-}
-
-func (h *ColorHandler) Handle(ctx context.Context, r slog.Record) error {
-	level := r.Level.String()
-	color := getColorForLevel(r.Level)
-	goid := getGoroutineID()
-
-	var caller string
-
-	showCaller := r.Level == slog.LevelDebug || r.Level == slog.LevelError
-
-	if showCaller && h.opts.AddSource && r.PC != 0 {
-		fs := runtime.CallersFrames([]uintptr{r.PC})
-		f, _ := fs.Next()
-		funcName := filepath.Base(f.Function)
-		fileName := filepath.Base(f.File)
-		caller = fmt.Sprintf("%s %s:%d", funcName, fileName, f.Line)
-	}
-
-	if caller != "" {
-		fmt.Fprintf(h.w, "%s[%s]%s %s [thread-%d] [%s] %s",
-			color,
-			level,
-			colorReset,
-			r.Time.Format("2006-01-02 15:04:05"),
-			goid,
-			caller,
-			r.Message,
-		)
-	} else {
-		fmt.Fprintf(h.w, "%s[%s]%s %s [thread-%d] %s",
-			color,
-			level,
-			colorReset,
-			r.Time.Format("2006-01-02 15:04:05"),
-			goid,
-			r.Message,
-		)
-	}
-
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key != slog.SourceKey {
-			fmt.Fprintf(h.w, " %s=%v", a.Key, a.Value)
-		}
-
-		return true
-	})
-
-	fmt.Fprintln(h.w)
-
-	return nil
-}
-
-func getColorForLevel(level slog.Level) string {
-	switch level {
-	case slog.LevelDebug:
-		return colorGray
-	case slog.LevelInfo:
-		return colorBlue
-	case slog.LevelWarn:
-		return colorYellow
-	case slog.LevelError:
-		return colorRed
-	default:
-		return colorReset
-	}
-}
-
-func getGoroutineID() uint64 {
-	b := make([]byte, 64)
-	b = b[:runtime.Stack(b, false)]
-
-	var goid uint64
-	fmt.Sscanf(string(b), "goroutine %d ", &goid)
-
-	return goid
 }
 
 func getLogLevelFromEnv() slog.Level {
@@ -224,30 +97,37 @@ func (l *stdLogger) Errorf(format string, args ...any) {
 	l.logger.Printf("[ERROR] "+format, args...)
 }
 
-var logger Logger
+var (
+	loggerMu sync.RWMutex
+	logger   Logger
+)
 
 func NewDefaultLogger() Logger {
-	return &slogLogger{logger: slog.New(NewColorHandler(os.Stdout, &slog.HandlerOptions{
+	return &slogLogger{logger: slog.New(logging.NewHandler(os.Stdout, &slog.HandlerOptions{
 		Level:     getLogLevelFromEnv(),
 		AddSource: true,
 	}))}
 }
 
 func logAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
-	if logger == nil {
+	loggerMu.RLock()
+	l := logger
+	loggerMu.RUnlock()
+
+	if l == nil {
 		return
 	}
 
-	if al, ok := logger.(AttrLogger); ok {
+	if al, ok := l.(AttrLogger); ok {
 		al.LogAttrs(ctx, level, msg, attrs...)
 
 		return
 	}
 
-	fallbackPrintf(level, msg, attrs)
+	fallbackPrintf(l, level, msg, attrs)
 }
 
-func fallbackPrintf(level slog.Level, msg string, attrs []slog.Attr) {
+func fallbackPrintf(l Logger, level slog.Level, msg string, attrs []slog.Attr) {
 	var b strings.Builder
 
 	b.WriteString(msg)
@@ -263,34 +143,49 @@ func fallbackPrintf(level slog.Level, msg string, attrs []slog.Attr) {
 
 	switch level {
 	case slog.LevelDebug:
-		logger.Debugf("%s", line)
+		l.Debugf("%s", line)
 	case slog.LevelInfo:
-		logger.Infof("%s", line)
+		l.Infof("%s", line)
 	case slog.LevelWarn:
-		logger.Warnf("%s", line)
+		l.Warnf("%s", line)
 	default:
-		logger.Errorf("%s", line)
+		l.Errorf("%s", line)
 	}
 }
 
 func SetLogger(l Logger) {
-	if l != nil {
-		logger = l
+	if l == nil {
+		return
 	}
+
+	loggerMu.Lock()
+	logger = l
+	loggerMu.Unlock()
 }
 
 func SetStdLogger(l *log.Logger) {
-	if l != nil {
-		logger = &stdLogger{logger: l}
+	if l == nil {
+		return
 	}
+
+	loggerMu.Lock()
+	logger = &stdLogger{logger: l}
+	loggerMu.Unlock()
 }
 
 func SetSlogLogger(l *slog.Logger) {
-	if l != nil {
-		logger = &slogLogger{logger: l}
+	if l == nil {
+		return
 	}
+
+	loggerMu.Lock()
+	logger = &slogLogger{logger: l}
+	loggerMu.Unlock()
 }
 
 func GetLogger() Logger {
+	loggerMu.RLock()
+	defer loggerMu.RUnlock()
+
 	return logger
 }

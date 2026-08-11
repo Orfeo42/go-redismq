@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
@@ -11,11 +11,11 @@ type traceCtxKey struct{}
 
 func TestStampTraceIDRoundTrip(t *testing.T) {
 	t.Run("survives toStreamAddArgsValues to passStreamMessage round trip", func(t *testing.T) {
-		original := TraceIDFromContext
+		original := getTraceIDFromContext()
 
-		t.Cleanup(func() { TraceIDFromContext = original })
+		t.Cleanup(func() { SetTraceIDFromContext(original) })
 
-		TraceIDFromContext = func(_ context.Context) string { return "trace-abc" }
+		SetTraceIDFromContext(func(_ context.Context) string { return "trace-abc" })
 
 		message := &Message{Topic: "t", Tag: "tag1", Body: "body"}
 		stampTraceID(context.Background(), message)
@@ -38,11 +38,11 @@ func TestStampTraceIDRoundTrip(t *testing.T) {
 
 func TestStampTraceID(t *testing.T) {
 	t.Run("does not overwrite existing trace id", func(t *testing.T) {
-		original := TraceIDFromContext
+		original := getTraceIDFromContext()
 
-		t.Cleanup(func() { TraceIDFromContext = original })
+		t.Cleanup(func() { SetTraceIDFromContext(original) })
 
-		TraceIDFromContext = func(_ context.Context) string { return "new-id" }
+		SetTraceIDFromContext(func(_ context.Context) string { return "new-id" })
 
 		message := &Message{}
 		message.setTraceID("original-id")
@@ -55,11 +55,11 @@ func TestStampTraceID(t *testing.T) {
 	})
 
 	t.Run("no-op when no hook registered", func(t *testing.T) {
-		original := TraceIDFromContext
+		original := getTraceIDFromContext()
 
-		t.Cleanup(func() { TraceIDFromContext = original })
+		t.Cleanup(func() { SetTraceIDFromContext(original) })
 
-		TraceIDFromContext = func(_ context.Context) string { return "" }
+		SetTraceIDFromContext(func(_ context.Context) string { return "" })
 
 		message := &Message{}
 		stampTraceID(context.Background(), message)
@@ -102,13 +102,13 @@ func TestConsumeContext(t *testing.T) {
 	})
 
 	t.Run("invokes registered TraceIDToContext", func(t *testing.T) {
-		original := TraceIDToContext
+		original := getTraceIDToContext()
 
-		t.Cleanup(func() { TraceIDToContext = original })
+		t.Cleanup(func() { SetTraceIDToContext(original) })
 
-		TraceIDToContext = func(ctx context.Context, traceID string) context.Context {
+		SetTraceIDToContext(func(ctx context.Context, traceID string) context.Context {
 			return context.WithValue(ctx, traceCtxKey{}, traceID)
-		}
+		})
 
 		message := &Message{}
 		message.setTraceID("ctx-id")
@@ -163,11 +163,11 @@ func TestMessageAttrsTraceID(t *testing.T) {
 
 func TestSendWithoutHookLeavesMessageUnstamped(t *testing.T) {
 	t.Run("stampTraceID no-ops without a registered hook", func(t *testing.T) {
-		original := TraceIDFromContext
+		original := getTraceIDFromContext()
 
-		t.Cleanup(func() { TraceIDFromContext = original })
+		t.Cleanup(func() { SetTraceIDFromContext(original) })
 
-		TraceIDFromContext = func(_ context.Context) string { return "" }
+		SetTraceIDFromContext(func(_ context.Context) string { return "" })
 
 		message := &Message{Topic: "t", Tag: "tag1"}
 		stampTraceID(context.Background(), message)

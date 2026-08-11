@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/Orfeo42/go-redismq/v3/internal/idgen"
+	"github.com/Orfeo42/go-redismq/v3/internal/streamname"
 )
 
 func Send(ctx context.Context, message *Message) (bool, error) {
@@ -73,7 +76,7 @@ func sendMessage(ctx context.Context, message *Message, source string) (bool, er
 		return false, ErrMessageIDNotBlank
 	}
 
-	message.SendTime = CurrentTimeMillis()
+	message.SendTime = currentTimeMillis()
 
 	client, err := newRedisClient()
 	if err != nil {
@@ -89,15 +92,15 @@ func sendMessage(ctx context.Context, message *Message, source string) (bool, er
 
 	stampTraceID(ctx, message)
 
-	streamMessageId, err := client.XAdd(ctx, message.toStreamAddArgsValues(GetQueueName(message.Topic))).Result()
+	streamMessageId, err := client.XAdd(ctx, message.toStreamAddArgsValues(streamname.Queue(message.Topic))).Result()
 	if err != nil {
-		logAttrs(ctx, slog.LevelWarn, "redismq: stream publish failed", append(messageAttrs(message), causeAttr(err), slog.String("stream", GetQueueName(message.Topic)))...)
+		logAttrs(ctx, slog.LevelWarn, "redismq: stream publish failed", append(messageAttrs(message), causeAttr(err), slog.String("stream", streamname.Queue(message.Topic)))...)
 
 		return false, err
 	}
 
 	message.MessageId = streamMessageId
-	logAttrs(ctx, slog.LevelInfo, "redismq: message published", append(messageAttrs(message), slog.String("stream", GetQueueName(message.Topic)), slog.String("source", source))...)
+	logAttrs(ctx, slog.LevelInfo, "redismq: message published", append(messageAttrs(message), slog.String("stream", streamname.Queue(message.Topic)), slog.String("source", source))...)
 
 	return true, nil
 }
@@ -107,8 +110,8 @@ func sendTransactionPrepareMessage(ctx context.Context, message *Message) (bool,
 		return false, errors.New("Blank Message")
 	}
 
-	message.MessageId = GenerateUniqueNo(message.Topic)
-	message.SendTime = CurrentTimeMillis()
+	message.MessageId = idgen.UniqueNo(message.Topic)
+	message.SendTime = currentTimeMillis()
 
 	client, err := newRedisClient()
 	if err != nil {
@@ -136,7 +139,7 @@ func sendTransactionPrepareMessage(ctx context.Context, message *Message) (bool,
 
 	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.Set(ctx, message.MessageId, jsonString, -1)
-		pipe.LPush(ctx, GetTransactionPrepareQueueName(message.Topic), message.MessageId)
+		pipe.LPush(ctx, streamname.TransactionPrepareQueue(message.Topic), message.MessageId)
 
 		return nil
 	})
@@ -168,7 +171,7 @@ func delTransactionPrepareMessage(ctx context.Context, message *Message) (bool, 
 
 	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.Del(ctx, message.MessageId)
-		pipe.LRem(ctx, GetTransactionPrepareQueueName(message.Topic), 1, message.MessageId)
+		pipe.LRem(ctx, streamname.TransactionPrepareQueue(message.Topic), 1, message.MessageId)
 
 		return nil
 	})
@@ -204,11 +207,11 @@ func commitTransactionPrepareMessage(ctx context.Context, message *Message) (boo
 	streamMessageId := ""
 
 	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		streamMessageId, _ = client.XAdd(ctx, message.toStreamAddArgsValues(GetQueueName(message.Topic))).Result()
+		streamMessageId, _ = client.XAdd(ctx, message.toStreamAddArgsValues(streamname.Queue(message.Topic))).Result()
 		message.MessageId = streamMessageId
 
 		pipe.Del(ctx, oldMessageId)
-		pipe.LRem(ctx, GetTransactionPrepareQueueName(message.Topic), 1, oldMessageId)
+		pipe.LRem(ctx, streamname.TransactionPrepareQueue(message.Topic), 1, oldMessageId)
 
 		return nil
 	})

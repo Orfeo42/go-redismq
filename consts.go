@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 const TopicInternal = "internal"
 const TagInvoke = "invoke"

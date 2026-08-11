@@ -1,8 +1,10 @@
-package go_redismq
+package redismq
 
 import (
 	"context"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -16,29 +18,37 @@ type sourceLine struct {
 func listGoSourceFiles(t *testing.T) []string {
 	t.Helper()
 
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read dir: %v", err)
-	}
-
 	var files []string
 
-	for _, entry := range entries {
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
 		if entry.IsDir() {
-			continue
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+
+			return nil
 		}
 
 		name := entry.Name()
 
 		if !strings.HasSuffix(name, ".go") {
-			continue
+			return nil
 		}
 
 		if strings.HasSuffix(name, "_test.go") {
-			continue
+			return nil
 		}
 
-		files = append(files, name)
+		files = append(files, filepath.ToSlash(path))
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk dir: %v", err)
 	}
 
 	return files

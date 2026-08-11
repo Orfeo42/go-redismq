@@ -1,4 +1,4 @@
-package go_redismq
+package redismq
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ func panicError(exception any) error {
 }
 
 func newRedisClient() (*redis.Client, error) {
-	options, err := GetRedisConfig()
+	options, err := getRedisConfig()
 	if err != nil {
 		return nil, err
 	}
