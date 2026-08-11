@@ -32,18 +32,21 @@ func (t TestListener) Consume(ctx context.Context, message *goredismq.Message) g
 }
 
 func TestProducerAndConsumer(t *testing.T) {
-	goredismq.RegisterRedisMqConfig(&goredismq.RedisMqConfig{
+	ctx := context.Background()
+
+	err := goredismq.RegisterRedisMqConfig(&goredismq.RedisMqConfig{
 		Group:    TestGroup,
 		Addr:     "127.0.0.1:6379",
 		Password: "",
 		Database: 0,
 	})
-	goredismq.RegisterListener(&TestListener{})
-	goredismq.StartRedisMqConsumer()
+	require.NoError(t, err)
+	goredismq.RegisterListener(ctx, &TestListener{})
+	goredismq.StartRedisMqConsumer(ctx)
 	t.Run("Test Start RedisMQ", func(t *testing.T) {
 		go func() {
 			for {
-				result, err := goredismq.Send(&goredismq.Message{
+				result, err := goredismq.Send(ctx, &goredismq.Message{
 					Topic: "test",
 					Tag:   "test",
 					Body:  "Test",

@@ -29,7 +29,7 @@ func isPointerType(value interface{}) bool {
 	typ := reflect.TypeOf(value)
 	kind := typ.Kind()
 
-	return kind == reflect.Ptr
+	return kind == reflect.Pointer
 }
 
 //func Deserialize(body []byte) interface{} {
@@ -41,24 +41,8 @@ func isPointerType(value interface{}) bool {
 //	return result
 //}
 
-// test case below
-
 type Person struct {
 	Name   string
 	Age    int
 	Emails []string
-}
-
-func test() {
-	p := Person{
-		Name:   "Alice",
-		Age:    30,
-		Emails: []string{"alice@example.com", "alice@gmail.com"},
-	}
-	logger.Infof("Serialize result:%s", Serialize(p))
-
-	var value float64
-
-	err := Deserialize(Serialize(1.3655), &value)
-	logger.Infof("Deserialize result:%f err:%s", value, err)
 }

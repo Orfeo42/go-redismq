@@ -2,6 +2,8 @@ package go_redismq
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -26,7 +28,7 @@ func isValidTopic(topic string) bool {
 	return len(topic) > 0 && strings.Compare(topic, "*") != 0
 }
 
-func RegisterListener(i IMessageListener) {
+func RegisterListener(ctx context.Context, i IMessageListener) {
 	if i == nil {
 		return
 	}
@@ -36,32 +38,24 @@ func RegisterListener(i IMessageListener) {
 	}
 
 	if len(Topics) > 60 {
-		if logger != nil {
-			logger.Warnf("Project Register Topic Too Much , Merge Please")
-		}
+		logAttrs(ctx, slog.LevelWarn, "redismq: too many topics registered, merge listeners", slog.Int("topic_count", len(Topics)))
 
 		return
 	}
 
 	if !isValidTopic(i.GetTopic()) {
-		if logger != nil {
-			logger.Warnf("Redismq Regist Default Consumer Invalid Topic:%s,Drop", i.GetTopic())
-		}
+		logAttrs(ctx, slog.LevelWarn, "redismq: invalid topic, listener dropped", slog.String("topic", i.GetTopic()))
 
 		return
 	}
 
 	if Listeners()[GetMessageKey(i.GetTopic(), i.GetTag())] != nil {
-		if logger != nil {
-			logger.Warnf("Redismq Multi %s,Consumer On:%s,Drop", i, GetMessageKey(i.GetTopic(), i.GetTag()))
-		}
+		logAttrs(ctx, slog.LevelWarn, "redismq: duplicate listener for message key, listener dropped", slog.String("message_key", GetMessageKey(i.GetTopic(), i.GetTag())), slog.String("listener_type", fmt.Sprintf("%T", i)))
 	} else {
 		messageKey := GetMessageKey(i.GetTopic(), i.GetTag())
 		Listeners()[messageKey] = i
 
 		Topics = append(Topics, i.GetTopic())
-		if logger != nil {
-			logger.Infof("Redismq Register IMessageListener:%s,Consumer:%s", i, messageKey)
-		}
+		logAttrs(ctx, slog.LevelInfo, "redismq: listener registered", slog.String("message_key", messageKey), slog.String("listener_type", fmt.Sprintf("%T", i)))
 	}
 }

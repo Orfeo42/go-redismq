@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -22,23 +23,29 @@ type InvoiceResponse struct {
 }
 
 func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan chan *InvoiceResponse) {
-	client := redis.NewClient(GetRedisConfig())
+	options, err := GetRedisConfig()
+	if err != nil {
+		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
+
+		return
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("MQStream Closs Redis Stream Client error:%s", err.Error())
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
 
 	replyChannel := getReplyChannel(req)
-	logger.Debugf("MethodInvoke waiting for replyChannel:%s", replyChannel)
 
 	pubSub := client.Subscribe(ctx, replyChannel)
 	defer func(pubSub *redis.PubSub) {
 		err := pubSub.Close()
 		if err != nil {
-			logger.Errorf("Error pubSub: %s", err.Error())
+			logAttrs(ctx, slog.LevelWarn, "redismq: pubsub close failed", causeAttr(err))
 		}
 	}(pubSub)
 
@@ -48,7 +55,7 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 		select {
 		case msg, ok := <-ch:
 			if !ok {
-				logger.Infof("listenForResponse channel closed")
+				logAttrs(ctx, slog.LevelInfo, "redismq: invoke response subscription channel closed", slog.String("reply_channel", replyChannel))
 
 				return
 			}
@@ -57,18 +64,16 @@ func listenForResponse(ctx context.Context, req *InvoiceRequest, responseChan ch
 
 			err := json.Unmarshal([]byte(msg.Payload), &res)
 			if err != nil {
-				logger.Errorf("Error deserializing response: %s", err.Error())
+				logAttrs(ctx, slog.LevelWarn, "redismq: invoke response deserialization failed", causeAttr(err), slog.String("reply_channel", replyChannel))
 
 				return
 			}
-
-			logger.Debugf("MethodInvoke get response:%s replyChannel:%s", MarshalToJsonString(res), replyChannel)
 
 			responseChan <- res
 
 			return
 		case <-ctx.Done():
-			logger.Infof("listenForResponse timeout or cancelled")
+			logAttrs(ctx, slog.LevelInfo, "redismq: invoke wait cancelled or timed out", slog.String("reply_channel", replyChannel))
 
 			return
 		}
@@ -85,13 +90,17 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	invokeId := fmt.Sprintf("%s%d", GenerateRandomAlphanumeric(6), CurrentTimeMillis())
 	req.MessageId = invokeId
 
-	//check group listener exist
-	client := redis.NewClient(GetRedisConfig())
+	options, err := GetRedisConfig()
+	if err != nil {
+		return &InvoiceResponse{Status: false, Response: err.Error()}
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("MQStream Closs Redis Stream Client error:%s", err.Error())
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
 
@@ -113,7 +122,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 	responseChan := make(chan *InvoiceResponse)
 	go listenForResponse(ctx, req, responseChan)
 
-	send, err := Send(&Message{
+	send, err := Send(ctx, &Message{
 		Topic: TopicInternal,
 		Tag:   TagInvoke,
 		Body:  MarshalToJsonString(req),
@@ -130,7 +139,7 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 		}
 	}
 
-	logger.Infof("RedisMQ:Measure:Invoke After Send Message cost：%s", time.Since(startTime))
+	logAttrs(ctx, slog.LevelInfo, "redismq: invoke request published", slog.Int64("cost_ms", time.Since(startTime).Milliseconds()), slog.String("invoke_method", req.Method), slog.String("invoke_group", req.Group), slog.String("message_id", req.MessageId))
 
 	go func() {
 		time.Sleep(time.Duration(timeoutSeconds) * time.Second)
@@ -147,14 +156,14 @@ func Invoke(ctx context.Context, req *InvoiceRequest, timeoutSeconds int) *Invoi
 
 	select {
 	case <-ctx.Done():
-		logger.Infof("RedisMQ:Measure:Invoke cost：%s", time.Since(startTime))
+		logAttrs(ctx, slog.LevelInfo, "redismq: invoke cancelled or timed out", slog.Int64("cost_ms", time.Since(startTime).Milliseconds()), slog.String("invoke_method", req.Method), slog.String("invoke_group", req.Group), slog.String("message_id", req.MessageId))
 
 		return &InvoiceResponse{
 			Status:   false,
 			Response: "Invoke context timeout",
 		}
 	case response := <-responseChan:
-		logger.Infof("RedisMQ:Measure:Invoke cost：%s", time.Since(startTime))
+		logAttrs(ctx, slog.LevelInfo, "redismq: invoke response received", slog.Int64("cost_ms", time.Since(startTime).Milliseconds()), slog.String("invoke_method", req.Method), slog.String("invoke_group", req.Group), slog.String("message_id", req.MessageId))
 
 		return response
 	}

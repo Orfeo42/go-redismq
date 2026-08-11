@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -26,6 +27,10 @@ type Logger interface {
 	Infof(format string, args ...any)
 	Warnf(format string, args ...any)
 	Errorf(format string, args ...any)
+}
+
+type AttrLogger interface {
+	LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr)
 }
 
 type ColorHandler struct {
@@ -183,6 +188,22 @@ func (l *slogLogger) Errorf(format string, args ...any) {
 	l.logger.Error(fmt.Sprintf(format, args...))
 }
 
+const callerSkip = 3
+
+func (l *slogLogger) LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+	if !l.logger.Enabled(ctx, level) {
+		return
+	}
+
+	var pcs [1]uintptr
+	runtime.Callers(callerSkip, pcs[:])
+
+	record := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	record.AddAttrs(attrs...)
+
+	_ = l.logger.Handler().Handle(ctx, record)
+}
+
 type stdLogger struct {
 	logger *log.Logger
 }
@@ -205,13 +226,51 @@ func (l *stdLogger) Errorf(format string, args ...any) {
 
 var logger Logger
 
-func init() {
-	level := getLogLevelFromEnv()
-	slogInstance := slog.New(NewColorHandler(os.Stdout, &slog.HandlerOptions{
-		Level:     level,
+func NewDefaultLogger() Logger {
+	return &slogLogger{logger: slog.New(NewColorHandler(os.Stdout, &slog.HandlerOptions{
+		Level:     getLogLevelFromEnv(),
 		AddSource: true,
-	}))
-	logger = &slogLogger{logger: slogInstance}
+	}))}
+}
+
+func logAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+	if logger == nil {
+		return
+	}
+
+	if al, ok := logger.(AttrLogger); ok {
+		al.LogAttrs(ctx, level, msg, attrs...)
+
+		return
+	}
+
+	fallbackPrintf(level, msg, attrs)
+}
+
+func fallbackPrintf(level slog.Level, msg string, attrs []slog.Attr) {
+	var b strings.Builder
+
+	b.WriteString(msg)
+
+	for _, a := range attrs {
+		b.WriteString(" ")
+		b.WriteString(a.Key)
+		b.WriteString("=")
+		b.WriteString(a.Value.String())
+	}
+
+	line := b.String()
+
+	switch level {
+	case slog.LevelDebug:
+		logger.Debugf("%s", line)
+	case slog.LevelInfo:
+		logger.Infof("%s", line)
+	case slog.LevelWarn:
+		logger.Warnf("%s", line)
+	default:
+		logger.Errorf("%s", line)
+	}
 }
 
 func SetLogger(l Logger) {

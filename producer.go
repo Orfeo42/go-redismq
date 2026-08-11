@@ -3,19 +3,19 @@ package go_redismq
 import (
 	"context"
 	"errors"
-	"strings"
+	"log/slog"
 
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/redis/go-redis/v9"
 )
 
-func Send(message *Message) (bool, error) {
-	return sendMessage(message, "ProducerWrapper")
+func Send(ctx context.Context, message *Message) (bool, error) {
+	return sendMessage(ctx, message, "ProducerWrapper")
 }
 
-func SendTransaction(message *Message, transactionExecuter func(messageToSend *Message) (TransactionStatus, error)) (bool, error) {
-	if strings.Compare(message.Tag, "blank") == 0 {
+func SendTransaction(ctx context.Context, message *Message, transactionExecuter func(messageToSend *Message) (TransactionStatus, error)) (bool, error) {
+	if message.Tag == TagBlank {
 		return false, errors.New("blank tag message")
 	}
 
@@ -23,7 +23,7 @@ func SendTransaction(message *Message, transactionExecuter func(messageToSend *M
 		return false, errors.New("delay message not support transaction")
 	}
 
-	send, err := sendTransactionPrepareMessage(message)
+	send, err := sendTransactionPrepareMessage(ctx, message)
 	if err != nil || !send {
 		return send, err
 	}
@@ -31,95 +31,121 @@ func SendTransaction(message *Message, transactionExecuter func(messageToSend *M
 	status, err := transactionExecuter(message)
 	switch status {
 	case RollbackTransaction:
-		_, rollBackErr := rollbackTransactionPrepareMessage(message)
+		_, rollBackErr := rollbackTransactionPrepareMessage(ctx, message)
 		if rollBackErr != nil {
-			logger.Errorf("rollbackTransactionPrepareMessage err:%s rollBackError:%s", err, rollBackErr)
+			logAttrs(ctx, slog.LevelError, "redismq: transaction rollback failed", causeAttr(rollBackErr), slog.Any("transaction_cause", err))
 		}
 
 		return false, err
 	case CommitTransaction:
-		return commitTransactionPrepareMessage(message)
+		return commitTransactionPrepareMessage(ctx, message)
 	default:
 		return false, errors.New("unknown transaction status")
 	}
 }
 
-func sendDelayMessage(message *Message) bool {
-	Assert(message.StartDeliverTime-gtime.Now().Timestamp() > 0, "StartDeliverTime Invalid, should > now")
-	send, err := SendDelay(message, message.StartDeliverTime-gtime.Now().Timestamp())
-	logger.Infof("Redismq SendDelayMessage result:%v", send)
+var (
+	ErrMessageIDNotBlank    = errors.New("redismq: message id must be blank when sending")
+	ErrDeliverTimeInThePast = errors.New("redismq: start deliver time must be in the future")
+)
 
-	if err != nil {
-		return false
+func sendDelayMessage(ctx context.Context, message *Message) (bool, error) {
+	if message.StartDeliverTime-gtime.Now().Timestamp() <= 0 {
+		return false, ErrDeliverTimeInThePast
 	}
 
-	return send
+	send, err := SendDelay(ctx, message, message.StartDeliverTime-gtime.Now().Timestamp())
+	logAttrs(ctx, slog.LevelInfo, "redismq: delay message send result", append(messageAttrs(message), slog.Bool("sent", send))...)
+
+	if err != nil {
+		return false, err
+	}
+
+	return send, nil
 }
 
-func sendMessage(message *Message, source string) (bool, error) {
-	if strings.Compare(message.Tag, "blank") == 0 {
+func sendMessage(ctx context.Context, message *Message, source string) (bool, error) {
+	if message.Tag == TagBlank {
 		return false, errors.New("blank空消息")
 	}
 
-	message.SendTime = CurrentTimeMillis()
-	Assert(len(message.MessageId) == 0, "Send Stream Need Blank MessageId")
+	if len(message.MessageId) != 0 {
+		return false, ErrMessageIDNotBlank
+	}
 
-	client := redis.NewClient(GetRedisConfig())
+	message.SendTime = CurrentTimeMillis()
+
+	options, err := GetRedisConfig()
+	if err != nil {
+		return false, err
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("sendMessage error:%s", err)
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
 
-	streamMessageId, err := client.XAdd(context.Background(), message.toStreamAddArgsValues(GetQueueName(message.Topic))).Result()
+	stampTraceID(ctx, message)
+
+	streamMessageId, err := client.XAdd(ctx, message.toStreamAddArgsValues(GetQueueName(message.Topic))).Result()
 	if err != nil {
-		logger.Errorf("RedisMQ_Send Stream Message exception:%s queueName=%s message:%v", err, GetQueueName(message.Topic), MarshalToJsonString(message))
+		logAttrs(ctx, slog.LevelWarn, "redismq: stream publish failed", append(messageAttrs(message), causeAttr(err), slog.String("stream", GetQueueName(message.Topic)))...)
 
 		return false, err
 	}
 
 	message.MessageId = streamMessageId
-	logger.Infof("RedisMQ_Send Stream Message Success Source:%s QueueName=%s messageKey:%s MessageId=%v", source, GetQueueName(message.Topic), GetMessageKey(message.Topic, message.Tag), message.MessageId)
+	logAttrs(ctx, slog.LevelInfo, "redismq: message published", append(messageAttrs(message), slog.String("stream", GetQueueName(message.Topic)), slog.String("source", source))...)
 
 	return true, nil
 }
 
-func sendTransactionPrepareMessage(message *Message) (bool, error) {
-	if strings.Compare(message.Tag, "blank") == 0 {
+func sendTransactionPrepareMessage(ctx context.Context, message *Message) (bool, error) {
+	if message.Tag == TagBlank {
 		return false, errors.New("Blank Message")
 	}
 
 	message.MessageId = GenerateUniqueNo(message.Topic)
 	message.SendTime = CurrentTimeMillis()
-	client := redis.NewClient(GetRedisConfig())
+
+	options, err := GetRedisConfig()
+	if err != nil {
+		return false, err
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("sendTransactionPrepareMessage error:%s", err)
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
+
+	stampTraceID(ctx, message)
 
 	messageJson, err := gjson.Marshal(message)
 
 	jsonString := string(messageJson)
 
 	if err != nil {
-		logger.Errorf("Send MQ Transaction Pre exception:%s message:%v", err.Error(), message)
+		logAttrs(ctx, slog.LevelWarn, "redismq: transaction prepare message marshal failed", append(messageAttrs(message), causeAttr(err))...)
 
 		return false, err
 	}
-	// 执行事务
-	_, err = client.TxPipelined(context.Background(), func(pipe redis.Pipeliner) error {
-		pipe.Set(context.Background(), message.MessageId, jsonString, -1)
-		pipe.LPush(context.Background(), GetTransactionPrepareQueueName(message.Topic), message.MessageId)
+
+	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Set(ctx, message.MessageId, jsonString, -1)
+		pipe.LPush(ctx, GetTransactionPrepareQueueName(message.Topic), message.MessageId)
 
 		return nil
 	})
 	if err != nil {
-		logger.Errorf("Send MQ Transaction Pre  exception:%s message:%v", err.Error(), message)
+		logAttrs(ctx, slog.LevelWarn, "redismq: transaction prepare pipeline failed", append(messageAttrs(message), causeAttr(err))...)
 
 		return false, err
 	}
@@ -127,67 +153,80 @@ func sendTransactionPrepareMessage(message *Message) (bool, error) {
 	return true, nil
 }
 
-func rollbackTransactionPrepareMessage(message *Message) (bool, error) {
-	return delTransactionPrepareMessage(message)
+func rollbackTransactionPrepareMessage(ctx context.Context, message *Message) (bool, error) {
+	return delTransactionPrepareMessage(ctx, message)
 }
 
-func delTransactionPrepareMessage(message *Message) (bool, error) {
-	client := redis.NewClient(GetRedisConfig())
+func delTransactionPrepareMessage(ctx context.Context, message *Message) (bool, error) {
+	options, err := GetRedisConfig()
+	if err != nil {
+		return false, err
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("delTransactionPrepareMessage error:%s", err)
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
 
-	_, err := client.TxPipelined(context.Background(), func(pipe redis.Pipeliner) error {
-		pipe.Del(context.Background(), message.MessageId)
-		pipe.LRem(context.Background(), GetTransactionPrepareQueueName(message.Topic), 1, message.MessageId)
+	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Del(ctx, message.MessageId)
+		pipe.LRem(ctx, GetTransactionPrepareQueueName(message.Topic), 1, message.MessageId)
 
 		return nil
 	})
 	if err != nil {
-		logger.Errorf("Del MQ Transaction Pre  exception:%s message:%v", err, message)
+		logAttrs(ctx, slog.LevelWarn, "redismq: transaction prepare message delete failed", append(messageAttrs(message), causeAttr(err))...)
 
 		return false, err
 	}
 
-	logger.Infof("rollbackTransactionPrepareMessage message:%v", message)
+	logAttrs(ctx, slog.LevelInfo, "redismq: transaction prepare message deleted", messageAttrs(message)...)
 
 	return true, nil
 }
 
-func commitTransactionPrepareMessage(message *Message) (bool, error) {
+func commitTransactionPrepareMessage(ctx context.Context, message *Message) (bool, error) {
 	oldMessageId := message.MessageId
 	message.MessageId = ""
-	client := redis.NewClient(GetRedisConfig())
+
+	options, err := GetRedisConfig()
+	if err != nil {
+		return false, err
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("commmitTransactionPrepareMessage error:%s", err)
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
+
+	stampTraceID(ctx, message)
 
 	streamMessageId := ""
 
-	_, err := client.TxPipelined(context.Background(), func(pipe redis.Pipeliner) error {
-		streamMessageId, _ = client.XAdd(context.Background(), message.toStreamAddArgsValues(GetQueueName(message.Topic))).Result()
+	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		streamMessageId, _ = client.XAdd(ctx, message.toStreamAddArgsValues(GetQueueName(message.Topic))).Result()
 		message.MessageId = streamMessageId
 
-		pipe.Del(context.Background(), oldMessageId)
-		pipe.LRem(context.Background(), GetTransactionPrepareQueueName(message.Topic), 1, oldMessageId)
+		pipe.Del(ctx, oldMessageId)
+		pipe.LRem(ctx, GetTransactionPrepareQueueName(message.Topic), 1, oldMessageId)
 
 		return nil
 	})
 	if err != nil {
-		logger.Errorf("Commit MQ Transaction Pre  exception:%s message:%v", err, message)
+		logAttrs(ctx, slog.LevelWarn, "redismq: transaction commit failed", append(messageAttrs(message), causeAttr(err))...)
 
 		return false, err
 	}
 
-	logger.Infof("Redismq commitTransactionPrepareMessage success message:%v prepareMessageId:%s targetMessageId:%s", message, oldMessageId, streamMessageId)
+	logAttrs(ctx, slog.LevelInfo, "redismq: transaction committed", append(messageAttrs(message), slog.String("prepare_message_id", oldMessageId))...)
 
 	return true, nil
 }

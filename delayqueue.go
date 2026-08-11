@@ -2,10 +2,13 @@ package go_redismq
 
 import (
 	"context"
+	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/gogf/gf/v2/encoding/gjson"
+	"github.com/gogf/gf/v2/errors/gcode"
+	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/redis/go-redis/v9"
 )
@@ -14,62 +17,97 @@ const (
 	MqDelayQueueName = "MQ_DELAY_QUEUE_SET"
 )
 
-func StartDelayBackgroundThread() {
+func StartDelayBackgroundThread(ctx context.Context) {
 	go func() {
 		defer func() {
 			if exception := recover(); exception != nil {
-				logger.Errorf("Redismq polligCore panic error:%s", exception)
+				var err error
+
+				if v, ok := exception.(error); ok && gerror.HasStack(v) {
+					err = v
+				} else {
+					err = gerror.NewCodef(gcode.CodeInternalPanic, "%+v", exception)
+				}
+
+				logAttrs(ctx, slog.LevelError, "redismq: delay background thread panic recovered", causeAttr(err), stackAttr(2))
 
 				return
 			}
 		}()
 
 		for {
-			polling()
-			time.Sleep(10 * time.Second)
+			polling(ctx)
+
+			select {
+			case <-ctx.Done():
+				logAttrs(ctx, slog.LevelInfo, "redismq: delay background thread stopped, context cancelled")
+
+				return
+			case <-time.After(10 * time.Second):
+			}
 		}
 	}()
 }
 
-func polling() {
-	client := redis.NewClient(GetRedisConfig())
+func polling(ctx context.Context) {
+	options, err := GetRedisConfig()
+	if err != nil {
+		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
+
+		return
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("RedisMq run error:%s", err.Error())
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
 
-	result, err := client.Keys(context.Background(), MqDelayQueueName).Result()
+	result, err := client.Keys(ctx, MqDelayQueueName).Result()
 	if err != nil {
 		return
 	}
 
 	for _, key := range result {
-		pollingCore(key)
+		pollingCore(ctx, key)
 	}
 }
 
-func pollingCore(key string) {
+func pollingCore(ctx context.Context, key string) {
 	defer func() {
 		if exception := recover(); exception != nil {
-			logger.Errorf("RedisMq polligCore panic error:%s", exception)
+			var err error
+
+			if v, ok := exception.(error); ok && gerror.HasStack(v) {
+				err = v
+			} else {
+				err = gerror.NewCodef(gcode.CodeInternalPanic, "%+v", exception)
+			}
+
+			logAttrs(ctx, slog.LevelError, "redismq: delay queue polling panic recovered", causeAttr(err), stackAttr(2))
 
 			return
 		}
 	}()
 
-	client := redis.NewClient(GetRedisConfig())
+	options, err := GetRedisConfig()
+	if err != nil {
+		logAttrs(ctx, slog.LevelError, "redismq: redis config not registered", causeAttr(err))
+
+		return
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("RedisMq polligCore error:%s", err.Error())
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
-
-	ctx := context.Background()
 
 	result, err := client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
 		Min:    "0",
@@ -82,8 +120,6 @@ func pollingCore(key string) {
 	}
 
 	if len(result) == 0 {
-		logger.Debugf("RedisMq Delay Queue:%s No Queue", MqDelayQueueName)
-
 		return
 	}
 
@@ -92,7 +128,7 @@ func pollingCore(key string) {
 
 		err = gjson.Unmarshal([]byte(messageJson), &message)
 		if err != nil {
-			logger.Errorf("RedisMq Unmarshal Message Error:[%v]", err)
+			logAttrs(ctx, slog.LevelWarn, "redismq: delay queue message unmarshal failed", causeAttr(err))
 
 			continue
 		}
@@ -102,31 +138,36 @@ func pollingCore(key string) {
 			message.StartDeliverTime = 0
 			message.MessageId = ""
 
-			send, sendErr := sendMessage(message, "DelayQueue")
+			_, sendErr := sendMessage(ctx, message, "DelayQueue")
 			if sendErr != nil {
-				logger.Errorf("RedisMq Delete From Delay Queue,And Send[%v], sendErr:%s", send, sendErr.Error())
-			} else {
-				logger.Debugf("RedisMq Delete From Delay Queue,And Send:%v", send)
+				logAttrs(ctx, slog.LevelWarn, "redismq: delay message removed but resend failed", append(messageAttrs(message), causeAttr(sendErr))...)
 			}
 		} else {
-			logger.Debugf("RedisMq Delete From Delay Err:%s", err.Error())
+			logAttrs(ctx, slog.LevelWarn, "redismq: delay queue message removal failed, message will be redelivered", append(messageAttrs(message), causeAttr(err))...)
 		}
 	}
 }
 
-func SendDelay(message *Message, delay int64) (bool, error) {
-	client := redis.NewClient(GetRedisConfig())
+func SendDelay(ctx context.Context, message *Message, delay int64) (bool, error) {
+	options, err := GetRedisConfig()
+	if err != nil {
+		return false, err
+	}
+
+	client := redis.NewClient(options)
 
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
-			logger.Errorf("RedisMq SendDelay error:%s", err.Error())
+			logAttrs(ctx, slog.LevelWarn, "redismq: redis client close failed", causeAttr(err))
 		}
 	}(client)
 
+	stampTraceID(ctx, message)
+
 	messageJson, err := gjson.Marshal(message)
 	if err != nil {
-		logger.Errorf("RedisMq SendDelay exception:%s message:%v", err.Error(), message)
+		logAttrs(ctx, slog.LevelWarn, "redismq: delay message marshal failed", append(messageAttrs(message), causeAttr(err), slog.String("delay_queue", MqDelayQueueName))...)
 
 		return false, err
 	}
@@ -134,12 +175,12 @@ func SendDelay(message *Message, delay int64) (bool, error) {
 	jsonString := string(messageJson)
 	score := gtime.Now().Timestamp() + delay
 
-	_, err = client.ZAdd(context.Background(), MqDelayQueueName, redis.Z{
+	_, err = client.ZAdd(ctx, MqDelayQueueName, redis.Z{
 		Score:  float64(score),
 		Member: jsonString,
 	}).Result()
 	if err != nil {
-		logger.Errorf("SendDelay exception:%s message:%v", err.Error(), message)
+		logAttrs(ctx, slog.LevelWarn, "redismq: delay message zadd failed", append(messageAttrs(message), causeAttr(err), slog.String("delay_queue", MqDelayQueueName))...)
 
 		return false, err
 	}

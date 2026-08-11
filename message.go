@@ -1,9 +1,13 @@
 package go_redismq
 
 import (
+	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/gogf/gf/v2/encoding/gjson"
+	"github.com/gogf/gf/v2/errors/gcode"
+	"github.com/gogf/gf/v2/errors/gerror"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -97,7 +101,7 @@ func (message *Message) toStreamAddArgsValues(stream string) *redis.XAddArgs {
 	}
 }
 
-func (message *Message) passStreamMessage(value map[string]interface{}) {
+func (message *Message) passStreamMessage(ctx context.Context, value map[string]any) {
 	if target, ok := value["topic"].(string); ok {
 		message.Topic = target
 	}
@@ -120,7 +124,14 @@ func (message *Message) passStreamMessage(value map[string]interface{}) {
 		if err == nil {
 			defer func() {
 				if exception := recover(); exception != nil {
-					logger.Errorf("Redismq passStreamMessage panic error:%s", exception)
+					var err error
+					if v, ok := exception.(error); ok && gerror.HasStack(v) {
+						err = v
+					} else {
+						err = gerror.NewCodef(gcode.CodeInternalPanic, "%+v", exception)
+					}
+
+					logAttrs(ctx, slog.LevelError, "redismq: passStreamMessage panic recovered", causeAttr(err), stackAttr(2), slog.String("message_id", message.MessageId))
 
 					return
 				}

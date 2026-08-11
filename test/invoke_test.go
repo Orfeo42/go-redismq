@@ -12,17 +12,20 @@ import (
 )
 
 func TestMethodInvoke(t *testing.T) {
-	goredismq.RegisterRedisMqConfig(&goredismq.RedisMqConfig{
+	ctx := context.Background()
+
+	err := goredismq.RegisterRedisMqConfig(&goredismq.RedisMqConfig{
 		Group:    TestGroup,
 		Addr:     "127.0.0.1:6379",
 		Password: "",
 		Database: 0,
 	})
-	goredismq.RegisterListener(&TestListener{})
-	goredismq.StartRedisMqConsumer()
+	require.NoError(t, err)
+	goredismq.RegisterListener(ctx, &TestListener{})
+	goredismq.RegisterInternalListeners(ctx)
+	goredismq.StartRedisMqConsumer(ctx)
 
-	ctx := context.Background()
-	goredismq.RegisterInvoke("TestInvoke", func(ctx context.Context, request interface{}) (response interface{}, err error) {
+	goredismq.RegisterInvoke(ctx, "TestInvoke", func(ctx context.Context, request interface{}) (response interface{}, err error) {
 		if request == "error" {
 			return nil, errors.New("error")
 		} else if request == "panic" {
