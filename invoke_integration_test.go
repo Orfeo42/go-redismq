@@ -14,47 +14,21 @@ import (
 func TestMethodInvoke(t *testing.T) {
 	requireRedis(t)
 
+	client, err := New(RedisMqConfig{Group: testGroup, Addr: testRedisAddr})
+	require.NoError(t, err)
+
+	err = client.RegisterListener(context.Background(), &stubListener{})
+	require.NoError(t, err)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	savedGroup, savedAddr, savedPassword, savedDatabase := snapshotConfig()
-	restoreConfig(t, savedGroup, savedAddr, savedPassword, savedDatabase)
-
-	listenerMu.Lock()
-	originalListeners := listeners
-	originalTopics := topics
-	listenerMu.Unlock()
-
-	t.Cleanup(func() {
-		listenerMu.Lock()
-		listeners = originalListeners
-		topics = originalTopics
-		listenerMu.Unlock()
-	})
-
-	invokeMu.Lock()
-	originalInvokeMap := invokeMap
-	invokeMap = make(map[string]func(ctx context.Context, request any) (response any, err error))
-	invokeMu.Unlock()
-
-	t.Cleanup(func() {
-		invokeMu.Lock()
-		invokeMap = originalInvokeMap
-		invokeMu.Unlock()
-	})
-
-	err := RegisterRedisMqConfig(context.Background(), &RedisMqConfig{
-		Group:    testGroup,
-		Addr:     "127.0.0.1:6379",
-		Password: "",
-		Database: 0,
-	})
+	err = client.Start(ctx)
 	require.NoError(t, err)
-	RegisterListener(ctx, &stubListener{})
-	RegisterInternalListeners(ctx)
-	StartRedisMqConsumer(ctx)
 
-	RegisterInvoke(ctx, "TestInvoke", func(ctx context.Context, request any) (response any, err error) {
+	defer closeClient(t, client)
+
+	err = client.RegisterInvoke(ctx, "TestInvoke", func(_ context.Context, request any) (response any, err error) {
 		switch request {
 		case "error":
 			return nil, errors.New("error")
@@ -68,9 +42,12 @@ func TestMethodInvoke(t *testing.T) {
 			return jsonutil.MarshalString(request) + ":TestResponse", nil
 		}
 	})
+	require.NoError(t, err)
+
 	time.Sleep(5 * time.Second)
+
 	t.Run("Test Method Invoke", func(t *testing.T) {
-		res := Invoke(ctx, &InvokeRequest{
+		res := client.Invoke(ctx, &InvokeRequest{
 			Group:   testGroup,
 			Method:  "TestInvoke",
 			Request: 1,
@@ -80,7 +57,7 @@ func TestMethodInvoke(t *testing.T) {
 		t.Logf("TestRequest:%s", jsonutil.MarshalString(res))
 	})
 	t.Run("Test Method Invoke Error", func(t *testing.T) {
-		res := Invoke(ctx, &InvokeRequest{
+		res := client.Invoke(ctx, &InvokeRequest{
 			Group:   testGroup,
 			Method:  "TestInvoke",
 			Request: "error",
@@ -90,7 +67,7 @@ func TestMethodInvoke(t *testing.T) {
 		t.Logf("TestErrorRequest:%s", jsonutil.MarshalString(res))
 	})
 	t.Run("Test Method Invoke Panic", func(t *testing.T) {
-		res := Invoke(ctx, &InvokeRequest{
+		res := client.Invoke(ctx, &InvokeRequest{
 			Group:   testGroup,
 			Method:  "TestInvoke",
 			Request: "panic",
@@ -100,7 +77,7 @@ func TestMethodInvoke(t *testing.T) {
 		t.Logf("TestPanicRequest:%s", jsonutil.MarshalString(res))
 	})
 	t.Run("Test Method Invoke Timeout", func(t *testing.T) {
-		res := Invoke(ctx, &InvokeRequest{
+		res := client.Invoke(ctx, &InvokeRequest{
 			Group:   testGroup,
 			Method:  "TestInvoke",
 			Request: "timeout",

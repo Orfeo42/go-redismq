@@ -3,7 +3,6 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export GOLANGCI_LINT_CACHE="${REPO_ROOT}/.cache/golangci-lint"
 
@@ -13,9 +12,3 @@ if ! golangci-lint run; then
     exit 1
 fi
 echo "✅ Linter passed"
-
-if [[ "${1:-}" == "--lint-only" ]]; then
-    exit 0
-fi
-
-"${SCRIPT_DIR}/deadcode-check.sh"

@@ -40,7 +40,6 @@ linters:
     - gochecksumtype
     # - gocognit
     # - goconst
-    - gocritic
     # - gocyclo
     - godot
     # - godox
@@ -123,14 +122,6 @@ linters:
         path: "(^|/)logger\\.go$"
 
   settings:
-    gocritic:
-      disable-all: true
-      enabled-checks:
-        - ruleguard
-      settings:
-        ruleguard:
-          rules: "${base-path}/ruleguard/rules.go"
-          failOn: all
     sloglint:
       no-mixed-args: false
       kv-only: false

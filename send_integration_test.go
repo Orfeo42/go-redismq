@@ -2,7 +2,6 @@ package redismq
 
 import (
 	"context"
-	"log/slog"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -10,11 +9,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/Orfeo42/go-redismq/v3/internal/jsonutil"
 )
 
 const testGroup = "GID_RedisMQ_Test1"
+
+const testRedisAddr = "127.0.0.1:6379"
 
 func requireRedis(t *testing.T) {
 	t.Helper()
@@ -23,7 +22,7 @@ func requireRedis(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:6379", 500*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", testRedisAddr, 500*time.Millisecond)
 	if err != nil {
 		t.Skip("redis not reachable at 127.0.0.1:6379")
 	}
@@ -43,45 +42,39 @@ func (l *stubListener) GetTag() string {
 	return "test"
 }
 
-func (l *stubListener) Consume(ctx context.Context, message *Message) Action {
-	count := l.receiveCount.Add(1)
-	logAttrs(ctx, slog.LevelInfo, "redismq: message received", slog.Int64("receive_count", count), slog.String("message", jsonutil.MarshalString(message)))
+func (l *stubListener) Consume(_ context.Context, _ *Message) Action {
+	l.receiveCount.Add(1)
 
 	return CommitMessage
+}
+
+func closeClient(t *testing.T, client *Client) {
+	t.Helper()
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_ = client.Close(closeCtx)
 }
 
 func TestProducerAndConsumer(t *testing.T) {
 	requireRedis(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	savedGroup, savedAddr, savedPassword, savedDatabase := snapshotConfig()
-	restoreConfig(t, savedGroup, savedAddr, savedPassword, savedDatabase)
-
-	listenerMu.Lock()
-	originalListeners := listeners
-	originalTopics := topics
-	listenerMu.Unlock()
-
-	t.Cleanup(func() {
-		listenerMu.Lock()
-		listeners = originalListeners
-		topics = originalTopics
-		listenerMu.Unlock()
-	})
-
-	err := RegisterRedisMqConfig(context.Background(), &RedisMqConfig{
-		Group:    testGroup,
-		Addr:     "127.0.0.1:6379",
-		Password: "",
-		Database: 0,
-	})
+	client, err := New(RedisMqConfig{Group: testGroup, Addr: testRedisAddr})
 	require.NoError(t, err)
 
 	listener := &stubListener{}
-	RegisterListener(ctx, listener)
-	StartRedisMqConsumer(ctx)
+
+	err = client.RegisterListener(context.Background(), listener)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = client.Start(ctx)
+	require.NoError(t, err)
+
+	defer closeClient(t, client)
 
 	t.Run("Test Start RedisMQ", func(t *testing.T) {
 		go func() {
@@ -92,12 +85,12 @@ func TestProducerAndConsumer(t *testing.T) {
 				default:
 				}
 
-				result, err := Send(ctx, &Message{
+				result, sendErr := client.Send(ctx, &Message{
 					Topic: "test",
 					Tag:   "test",
 					Body:  "Test",
 				})
-				assert.NoError(t, err, "error")
+				assert.NoError(t, sendErr, "error")
 				assert.True(t, result)
 				time.Sleep(1 * time.Second)
 			}

@@ -2,6 +2,7 @@ package idgen
 
 import (
 	"regexp"
+	"sync"
 	"testing"
 )
 
@@ -27,6 +28,27 @@ func TestRandomAlphanumeric(t *testing.T) {
 		if got != "" {
 			t.Fatalf("expected empty string, got %q", got)
 		}
+	})
+}
+
+func TestConcurrentRandomAlphanumeric(t *testing.T) {
+	t.Run("safe under concurrent use", func(t *testing.T) {
+		const n = 100
+
+		var wg sync.WaitGroup
+		wg.Add(n)
+
+		for i := 0; i < n; i++ {
+			go func() {
+				defer wg.Done()
+
+				if got := RandomAlphanumeric(6); len(got) != 6 {
+					t.Errorf("expected length 6, got %d", len(got))
+				}
+			}()
+		}
+
+		wg.Wait()
 	})
 }
 

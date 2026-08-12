@@ -1,7 +1,6 @@
 package redismq
 
 import (
-	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -81,7 +80,7 @@ func listGoSourceFiles(t *testing.T) []string {
 
 		if entry.IsDir() {
 			switch entry.Name() {
-			case ".git", ".tools", "ruleguard":
+			case ".git":
 				return filepath.SkipDir
 			}
 
@@ -206,40 +205,4 @@ func TestNoPanic(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestAttrHelpersExist(t *testing.T) {
-	t.Run("messageAttrs", func(t *testing.T) {
-		m := &Message{Topic: "t", Tag: "tag1", MessageId: "id1", ReconsumeTimes: 1, ReconsumeMax: 3}
-
-		attrs := messageAttrs(m)
-		if len(attrs) == 0 {
-			t.Fatal("expected non-empty attrs")
-		}
-	})
-
-	t.Run("topicAttrs", func(t *testing.T) {
-		attrs := topicAttrs("t1")
-		if len(attrs) != 3 {
-			t.Fatalf("expected 3 attrs, got %d", len(attrs))
-		}
-	})
-
-	t.Run("causeAttr", func(t *testing.T) {
-		attr := causeAttr(context.Canceled)
-		if attr.Key != "cause" {
-			t.Fatalf("expected key %q, got %q", "cause", attr.Key)
-		}
-	})
-
-	t.Run("stackAttr", func(t *testing.T) {
-		attr := stackAttr(1)
-		if attr.Key != "stack" {
-			t.Fatalf("expected key %q, got %q", "stack", attr.Key)
-		}
-
-		if _, ok := attr.Value.Any().([]string); !ok {
-			t.Fatalf("expected []string stack value, got %T", attr.Value.Any())
-		}
-	})
 }

@@ -33,10 +33,6 @@ func sourceBasename(t *testing.T, pc uintptr) string {
 	return filepath.Base(frame.File)
 }
 
-func viaOneWrapperFrame(a *Adapter) {
-	a.LogAttrsFromFreeFunc(context.Background(), slog.LevelWarn, "wrapped call")
-}
-
 func TestAdapterLogAttrsDirectCallerResolvesSourceToCallSite(t *testing.T) {
 	handler := &captureHandler{}
 	a := NewSlogAdapter(slog.New(handler))
@@ -54,35 +50,16 @@ func TestAdapterLogAttrsDirectCallerResolvesSourceToCallSite(t *testing.T) {
 	}
 }
 
-func TestAdapterLogAttrsFromFreeFuncResolvesSourceThroughOneWrapper(t *testing.T) {
-	handler := &captureHandler{}
-	a := NewSlogAdapter(slog.New(handler))
-
-	viaOneWrapperFrame(a)
-
-	if len(handler.records) != 1 {
-		t.Fatalf("expected 1 record, got %d", len(handler.records))
-	}
-
-	file := sourceBasename(t, handler.records[0].PC)
-
-	if file != "adapter_test.go" {
-		t.Fatalf("expected source file adapter_test.go, got %s", file)
-	}
-}
-
 type fakeAttrLogger struct {
 	calls int
 
-	ctx   context.Context
 	level slog.Level
 	msg   string
 	attrs []slog.Attr
 }
 
-func (f *fakeAttrLogger) LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+func (f *fakeAttrLogger) LogAttrs(_ context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
 	f.calls++
-	f.ctx = ctx
 	f.level = level
 	f.msg = msg
 	f.attrs = attrs

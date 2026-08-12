@@ -23,7 +23,7 @@ readonly REPO_ROOT
 
 staged_files="$(git diff --cached --name-only)"
 if grep -qE "${CODE_PATTERN}" <<< "${staged_files}"; then
-    "${REPO_ROOT}/.scripts/code-validate.sh" --lint-only
+    "${REPO_ROOT}/.scripts/code-validate.sh"
 else
     echo "⏭️  Pre-commit: no code changes; skipping validation."
 fi

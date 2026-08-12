@@ -2,7 +2,6 @@ package logging
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -20,10 +19,7 @@ type AttrLogger interface {
 	LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr)
 }
 
-const (
-	DirectCallerSkip   = 2
-	FreeFuncCallerSkip = 3
-)
+const DirectCallerSkip = 2
 
 type Adapter struct {
 	hostLogger Logger
@@ -49,66 +45,10 @@ func NewSlogAdapter(l *slog.Logger) *Adapter {
 	return &Adapter{slogLogger: l}
 }
 
-func (a *Adapter) Debugf(format string, args ...any) {
-	if a.slogLogger != nil {
-		a.slogLogger.Debug(fmt.Sprintf(format, args...))
-
-		return
-	}
-
-	if a.hostLogger != nil {
-		a.hostLogger.Debugf(format, args...)
-	}
-}
-
-func (a *Adapter) Infof(format string, args ...any) {
-	if a.slogLogger != nil {
-		a.slogLogger.Info(fmt.Sprintf(format, args...))
-
-		return
-	}
-
-	if a.hostLogger != nil {
-		a.hostLogger.Infof(format, args...)
-	}
-}
-
-func (a *Adapter) Warnf(format string, args ...any) {
-	if a.slogLogger != nil {
-		a.slogLogger.Warn(fmt.Sprintf(format, args...))
-
-		return
-	}
-
-	if a.hostLogger != nil {
-		a.hostLogger.Warnf(format, args...)
-	}
-}
-
-func (a *Adapter) Errorf(format string, args ...any) {
-	if a.slogLogger != nil {
-		a.slogLogger.Error(fmt.Sprintf(format, args...))
-
-		return
-	}
-
-	if a.hostLogger != nil {
-		a.hostLogger.Errorf(format, args...)
-	}
-}
-
 func (a *Adapter) LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
 	var pcs [1]uintptr
 
 	runtime.Callers(DirectCallerSkip, pcs[:])
-
-	a.LogRecord(ctx, level, msg, pcs[0], attrs)
-}
-
-func (a *Adapter) LogAttrsFromFreeFunc(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
-	var pcs [1]uintptr
-
-	runtime.Callers(FreeFuncCallerSkip, pcs[:])
 
 	a.LogRecord(ctx, level, msg, pcs[0], attrs)
 }

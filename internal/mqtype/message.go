@@ -144,10 +144,6 @@ func (message *Message) decodeStreamMetadata(metadata string) error {
 	return nil
 }
 
-// PassStreamMessage populates the message from a raw stream entry. It returns
-// panicStack non-nil only when the metadata decode step panicked and was
-// recovered; callers use that to distinguish a recovered panic (log at error
-// level with a stack) from a plain decode failure (log at warn level).
 func (message *Message) PassStreamMessage(value map[string]any) (panicStack []string, err error) {
 	if target, ok := value["topic"].(string); ok {
 		message.Topic = target

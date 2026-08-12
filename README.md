@@ -9,6 +9,7 @@
 - Transactional message sending and checking
 - Method invocation via messages
 - Customizable message listeners and checkers
+- Constructor-injected `Client` — no package-level mutable state, safe to run multiple independent instances in one process
 
 ## Getting Started
 
@@ -17,65 +18,76 @@
 Add the module to your project:
 
 ```
-go get github.com/Orfeo42/go-redismq/v2
+go get github.com/Orfeo42/go-redismq/v3
 ```
 
 ### Basic Usage
-
-The startup sequence below is order-sensitive — each step depends on the one before it:
 
 ```go
 package main
 
 import (
     "context"
+    "log"
     "log/slog"
+    "time"
 
-    goredismq "github.com/Orfeo42/go-redismq/v2"
+    "github.com/Orfeo42/go-redismq/v3"
 )
 
 type MyListener struct{}
 
 func (l MyListener) GetTopic() string { return "topic" }
 func (l MyListener) GetTag() string   { return "tag" }
-func (l MyListener) Consume(ctx context.Context, msg *goredismq.Message) goredismq.Action {
+func (l MyListener) Consume(ctx context.Context, msg *redismq.Message) redismq.Action {
     // handle message
-    return goredismq.CommitMessage
+    return redismq.CommitMessage
 }
 
 func main() {
     ctx := context.Background()
 
-    goredismq.SetSlogLogger(slog.Default())
-
-    cfg := &goredismq.RedisMqConfig{
+    client, err := redismq.New(redismq.RedisMqConfig{
         Group:    "YourGroup",
         Addr:     "127.0.0.1:6379",
         Password: "",
         Database: 0,
+    }, redismq.WithSlogLogger(slog.Default()))
+    if err != nil {
+        log.Fatal(err)
     }
-    if err := goredismq.RegisterRedisMqConfig(cfg); err != nil {
-        panic(err)
+    defer func() {
+        closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+        defer cancel()
+        _ = client.Close(closeCtx)
+    }()
+
+    if err := client.RegisterListener(ctx, &MyListener{}); err != nil {
+        log.Fatal(err)
     }
 
-    goredismq.RegisterListener(ctx, &MyListener{})
-    goredismq.RegisterInternalListeners(ctx)
-    goredismq.StartRedisMqConsumer(ctx)
+    if err := client.Start(ctx); err != nil {
+        log.Fatal(err)
+    }
+
+    // ... application runs ...
 }
 ```
 
 Why the order matters:
 
-1. **The logger goes first.** There is no implicit default logger any more: until one is set, the library's log calls are silent no-ops, so a config or registration problem raised before this line would produce no log output at all. For the built-in colored dev logger instead of a `slog.Logger`, use `goredismq.SetLogger(goredismq.NewDefaultLogger())`.
-2. **`RegisterRedisMqConfig` returns an error** instead of panicking on an invalid config — check it before continuing (see [Error Handling](#error-handling)).
-3. **Listeners must be registered before the consumer starts** so their topics are known when the consume loops spin up.
-4. **`RegisterInternalListeners(ctx)` is mandatory if the host uses `Invoke`.** This used to happen implicitly in a `func init()`; that implicit registration is gone. Forgetting this call means the invoke listener is never registered and every `Invoke` call fails to find its handler — this is the single most likely upgrade mistake.
-5. **`StartRedisMqConsumer(ctx)` owns the root context.** The `ctx` passed here is the one every background loop, Redis call, and log line in the library derives from (see [Context and Graceful Shutdown](#context-and-graceful-shutdown)).
+1. **`New` builds the `Client` and validates configuration eagerly.** `Group` and `Addr` are required; a blank one returns `ErrConfigGroupBlank` / `ErrConfigAddrBlank` before any Redis connection is attempted (see [Error Handling](#error-handling)).
+2. **Everything optional is an `Option`.** Logger, trace-id hooks, and clock all have working zero-value defaults (a no-op logger, identity trace hooks, the system clock) — pass only the ones you need. See [Options](#options).
+3. **Listeners and checkers must be registered before `Start`** so their topics are known when the consume loops spin up. `RegisterListener` and `RegisterChecker` now return an `error` instead of logging-and-dropping invalid or duplicate registrations — check it.
+4. **`Start(ctx)` owns the root context.** It derives its own cancellable context from `ctx`, wires the internal invoke listener automatically (see below), and returns once the consumer's bootstrap (resolving a consumer name, initializing the death-queue group) succeeds or fails — it does not block for the process lifetime. Every background loop, Redis call, and log line the library emits from that point on derives from that context (see [Context and Graceful Shutdown](#context-and-graceful-shutdown)).
+5. **`defer client.Close(ctx)` every `Client` you `Start`.** `Close` cancels the background loops, waits for in-flight message handlers to finish (bounded by the `ctx` you pass it), and only then closes the shared Redis connection.
+
+**`RegisterInternalListeners` is gone.** In the pre-`Client` API this had to be called explicitly after `RegisterListener` and before `StartRedisMqConsumer`, and forgetting it was the single most common upgrade mistake — every `Invoke` call would silently fail to find its handler. `Start` now wires the invoke listener itself as its first step, so the mistake is no longer possible to make.
 
 **Send a message:**
 
 ```go
-if _, err := goredismq.Send(ctx, &goredismq.Message{
+if _, err := client.Send(ctx, &redismq.Message{
     Topic: "topic",
     Tag:   "tag",
     Body:  "Hello, World!",
@@ -84,114 +96,183 @@ if _, err := goredismq.Send(ctx, &goredismq.Message{
 }
 ```
 
+## Options
+
+`New` takes required config as a plain struct and everything else as functional options:
+
+```go
+func New(cfg RedisMqConfig, opts ...Option) (*Client, error)
+
+func WithLogger(l Logger) Option
+func WithSlogLogger(l *slog.Logger) Option
+func WithStdLogger(l *log.Logger) Option
+func WithTraceIDFromContext(fn func(ctx context.Context) string) Option
+func WithTraceIDToContext(fn func(ctx context.Context, traceID string) context.Context) Option
+func WithClock(c Clock) Option
+```
+
+A `nil` argument to any `With*` option is ignored — the zero-value default stays in effect instead of panicking or erroring. `Clock` is `interface{ Now() time.Time }`, useful for deterministic tests; the default is the real system clock.
+
 ## Context and Graceful Shutdown
 
-Every entry point takes a `context.Context` — there are no ctx-less variants. The root context passed to `StartRedisMqConsumer` reaches every background loop, every Redis call, and every log line the library emits.
-
-Cancelling that context shuts the library down in an orderly way: the consume loops, the delay-queue poller, the trim scheduler, and the invoke keepalive loop all exit on cancellation, and the 60-second blocking stream read (`XReadGroup` with `Block: 60 * time.Second`) unblocks immediately instead of waiting out its timeout. Cancellation is treated as a normal shutdown, not a fault — it does not produce error-level log noise.
+Every entry point takes a `context.Context` — there are no ctx-less variants. The context passed to `Start` reaches every background loop, every Redis call, and every log line the library emits from that `Client`.
 
 ```go
 ctx, cancel := context.WithCancel(context.Background())
 
-goredismq.StartRedisMqConsumer(ctx)
+if err := client.Start(ctx); err != nil {
+    log.Fatal(err)
+}
 
 // ... application runs ...
 
-cancel() // consume loops, delay poller, trim scheduler and invoke
-         // keepalive all exit; no error-level logs are produced
+cancel() // or call client.Close(closeCtx) directly, see below
 ```
+
+Cancelling the context (or calling `Close`, which cancels it internally) shuts the library down in an orderly way: the consume loops, the delay-queue poller, the trim scheduler, and the invoke keepalive loop all exit on cancellation, and the 60-second blocking stream read (`XReadGroup` with `Block: 60 * time.Second`) unblocks immediately instead of waiting out its timeout. Cancellation is treated as a normal shutdown, not a fault — it does not produce error-level log noise.
+
+`Close(ctx)` is the supported shutdown path and does three things in order:
+
+1. Cancels the context `Start` derived internally.
+2. Waits for every background loop **and every in-flight message handler** to finish, bounded by the `ctx` passed to `Close` — if that context is done first, `Close` returns its error (e.g. `context.DeadlineExceeded`) instead of blocking forever.
+3. Only once that wait completes cleanly does it close the shared Redis connection. Closing it earlier, while a loop is mid-`XReadGroup`/`XAck`, would surface spurious connection errors during an otherwise-clean shutdown.
+
+Point 2 is a deliberate fix over the pre-`Client` behavior: message handlers used to run as fully detached goroutines that a shutdown could not wait for or account for. They are now tracked the same way every other background loop is, so a bounded `Close` genuinely waits for work in flight instead of abandoning it mid-execution.
+
+```go
+closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+
+if err := client.Close(closeCtx); err != nil {
+    // in-flight handlers did not finish within 10s
+}
+```
+
+`Close` is safe to call even if `Start` was never invoked (it just closes the Redis connection).
 
 ## Error Handling
 
-`RegisterRedisMqConfig` returns an `error` instead of panicking on invalid configuration. The sentinels are plain package vars, comparable with `errors.Is`:
+`New` returns an `error` instead of panicking on invalid configuration. The sentinels are plain package vars, comparable with `errors.Is`:
 
 ```go
 var (
-    ErrConfigNil        = errors.New("redismq: config is nil")
     ErrConfigAddrBlank  = errors.New("redismq: config addr is blank")
     ErrConfigGroupBlank = errors.New("redismq: config group is blank")
-    ErrConfigNotSet     = errors.New("redismq: redis config not registered")
 )
 ```
 
-`ErrConfigNil`, `ErrConfigAddrBlank`, and `ErrConfigGroupBlank` are returned by `RegisterRedisMqConfig`. `ErrConfigNotSet` is returned by `GetRedisConfig` (and therefore by every function that calls it internally — `Send`, `SendDelay`, `SendTransaction`, and the consumer/listener machinery) when no config has been registered yet:
-
 ```go
-if err := goredismq.RegisterRedisMqConfig(cfg); err != nil {
+client, err := redismq.New(cfg)
+if err != nil {
     switch {
-    case errors.Is(err, goredismq.ErrConfigNil):
-        // cfg was nil
-    case errors.Is(err, goredismq.ErrConfigAddrBlank):
+    case errors.Is(err, redismq.ErrConfigAddrBlank):
         // cfg.Addr was empty
-    case errors.Is(err, goredismq.ErrConfigGroupBlank):
+    case errors.Is(err, redismq.ErrConfigGroupBlank):
         // cfg.Group was empty
     }
 }
 ```
 
-Sending also has its own sentinels, `ErrMessageIDNotBlank` (a message with a pre-set `MessageId` was passed to `Send`) and `ErrDeliverTimeInThePast` (a delayed message's computed delivery time is not in the future).
+A `RedisMqConfig` cannot be nil — `New` takes it by value — so there is no equivalent of the old `ErrConfigNil`, and there is no way to end up with a `*Client` whose config was never validated, so there is no equivalent of the old `ErrConfigNotSet` either: a `Client` cannot exist without already-validated config.
 
-The library no longer panics on invalid configuration. `Assert`, `AssertError`, `Try`, and `SystemAssertPrefix` were removed entirely — every place that used to assert-and-panic now returns an error instead.
+`Start` can fail with `ErrConsumerNameUnresolved` if the process has no non-loopback IPv4 interface to derive a consumer identity from.
+
+Registration now fails loudly instead of logging-and-dropping:
+
+| Method | Sentinels |
+| --- | --- |
+| `RegisterListener` | `ErrNilListener`, `ErrTooManyTopics`, `ErrInvalidTopic`, `ErrDuplicateListener` |
+| `RegisterChecker` | `ErrNilChecker`, `ErrDuplicateChecker` |
+| `RegisterInvoke` | `ErrMethodNameBlank`, `ErrHandlerNil`, `ErrMethodAlreadyRegistered` |
+
+Sending has its own sentinels: `ErrMessageIDNotBlank` (a message with a pre-set `MessageId` was passed to `Send`), `ErrBlankTag` (a message's `Tag` was blank), `ErrDelayNotSupportedInTransaction` (a delayed message was passed to `SendTransaction`), `ErrUnknownTransactionStatus` (a transaction executer returned a `TransactionStatus` other than `CommitTransaction`/`RollbackTransaction`), and `ErrDeliverTimeInThePast` (a delayed message's computed delivery time is not in the future).
+
+The library does not panic on invalid configuration or invalid input. `Assert`, `AssertError`, `Try`, and `SystemAssertPrefix` were removed entirely, and nothing replaced them by design — every place that used to assert-and-panic now returns an error instead.
 
 ## Trace ID Propagation
 
-The library does not hardcode a context key it does not own for trace ids. Instead it exposes two package-level hooks the host registers once at startup:
+The library does not hardcode a context key it does not own for trace ids. Instead it exposes two constructor options the host passes once, at `New`:
 
 ```go
-var TraceIDFromContext = func(ctx context.Context) string { return "" }
-var TraceIDToContext = func(ctx context.Context, traceID string) context.Context { return ctx }
+client, err := redismq.New(cfg,
+    redismq.WithTraceIDFromContext(myctx.GetTraceID),
+    redismq.WithTraceIDToContext(myctx.WithTraceID),
+)
 ```
 
-```go
-goredismq.TraceIDFromContext = myctx.GetTraceID
-goredismq.TraceIDToContext = myctx.WithTraceID
-```
+Mechanism: on publish, the trace id is read from the sending context via the `WithTraceIDFromContext` hook and stamped into the message's `CustomData["traceId"]`, which already round-trips through the message's `metadata` JSON on the stream. On consume, the library reads it back; if the message predates the feature (no stored trace id), it generates a new one. The resulting id is placed into the context via the `WithTraceIDToContext` hook before that context is passed to `IMessageListener.Consume` — so the host's own listener logs carry the trace id too, not just the library's. A redelivered or delayed message keeps its original trace id rather than being restamped.
 
-Mechanism: on publish, the trace id is read from the sending context via `TraceIDFromContext` and stamped into the message's `CustomData["traceId"]`, which already round-trips through the message's `metadata` JSON on the stream. On consume, the library reads it back; if the message predates the feature (no stored trace id), it generates a new one. The resulting id is placed into the context via `TraceIDToContext` before that context is passed to `IMessageListener.Consume` — so the host's own listener logs carry the trace id too, not just the library's. A redelivered or delayed message keeps its original trace id rather than being restamped.
-
-Until both hooks are registered, log lines are still structured but trace-less: `TraceIDFromContext` returns `""` and no `trace_id` attribute is attached.
+Without these options, log lines are still structured but trace-less: the default hook returns `""` and no `trace_id` attribute is attached.
 
 ## Testing
 
-Run unit tests:
+Run the unit tests:
 
 ```
-go test ./test/...
+go test ./...
 ```
 
-## Migration Guide (Breaking Changes)
+Two tests (`TestProducerAndConsumer`, `TestMethodInvoke`) are integration tests against a real Redis at `127.0.0.1:6379`. They probe the address with a short-timeout TCP dial and call `t.Skip` if nothing answers, so `go test ./...` passes in an environment with no Redis running — it just skips those two. To skip them unconditionally regardless of whether Redis happens to be reachable, run in short mode:
 
-A refactor replaced printf logging with structured `slog` attributes, replaced assertion/panic validation with returned errors, removed the implicit `init()` registration, and threaded `context.Context` through every entry point. This is a breaking change for every host.
+```
+go test -short ./...
+```
 
-`go.mod` currently declares `github.com/Orfeo42/go-redismq/v2`. A further bump to `/v3` is a pending release decision and is not live — do not import `/v3` paths.
+Run with the race detector, as this repository's CI does:
 
-| Function / behavior | Before | After |
-| --- | --- | --- |
-| `RegisterRedisMqConfig` | no return value; panicked on invalid config | returns `error` (`ErrConfigNil`, `ErrConfigAddrBlank`, `ErrConfigGroupBlank`) |
-| `GetRedisConfig` | returns `*redis.Options` | returns `(*redis.Options, error)` (`ErrConfigNotSet`) |
-| `Send` | `Send(message *Message)` | `Send(ctx context.Context, message *Message)` |
-| `SendDelay` | `SendDelay(message *Message, delay int64)` | `SendDelay(ctx context.Context, message *Message, delay int64)` |
-| `SendTransaction` | `SendTransaction(message, executer)` | `SendTransaction(ctx, message, executer)` |
-| `RegisterListener` | `RegisterListener(i)` | `RegisterListener(ctx, i)` |
-| `RegisterChecker` | `RegisterChecker(i)` | `RegisterChecker(ctx, i)` |
-| `RegisterInvoke` | `RegisterInvoke(name, op)` | `RegisterInvoke(ctx, name, op)` |
-| `StartRedisMqConsumer` | `StartRedisMqConsumer()` | `StartRedisMqConsumer(ctx)` |
-| `StartDelayBackgroundThread` | `StartDelayBackgroundThread()` | `StartDelayBackgroundThread(ctx)` |
-| Invoke listener registration | implicit, via `func init()` | explicit `RegisterInternalListeners(ctx)` — the host must call it |
-| Default logger | implicit, active until overridden | none; `logger` stays unset until `SetLogger`/`SetSlogLogger`/`SetStdLogger` is called (opt into the old default with `SetLogger(NewDefaultLogger())`) |
-| `Assert`, `AssertError`, `Try`, `SystemAssertPrefix` | present (`assert.go`) | removed; invalid input returns an error or is logged and dropped instead of panicking |
+```
+go test -race -count=1 ./...
+```
 
-There are no `SendContext`/`SendDelayContext`/`SendTransactionContext` names at any point in this API — `Send`, `SendDelay`, and `SendTransaction` themselves took the `ctx` parameter.
+## Migration Guide
+
+### This release: package-global API → constructor-injected `Client`
+
+Every package-level function and mutable global is gone. A host now calls `redismq.New(cfg, opts...)` once to get a `*Client`, and every operation is a method on it. Multiple `Client`s in the same process are fully independent — they do not share a registry, logger, tracer, or Redis connection.
+
+| Before | After |
+| --- | --- |
+| `RegisterRedisMqConfig(ctx, *RedisMqConfig) error` + package-level state | `redismq.New(cfg RedisMqConfig, opts ...Option) (*Client, error)` |
+| `SetLogger` / `SetStdLogger` / `SetSlogLogger` / `GetLogger` (runtime-mutable) | `WithLogger` / `WithStdLogger` / `WithSlogLogger` passed to `New` (fixed for the `Client`'s lifetime) |
+| `SetTraceIDFromContext` / `SetTraceIDToContext` (runtime-mutable) | `WithTraceIDFromContext` / `WithTraceIDToContext` passed to `New` |
+| `Send(ctx, message)` | `client.Send(ctx, message)` |
+| `SendDelay(ctx, message, delay)` | `client.SendDelay(ctx, message, delay)` |
+| `SendTransaction(ctx, message, executer)` | `client.SendTransaction(ctx, message, executer)` |
+| `Invoke(ctx, req, timeoutSeconds) *InvokeResponse` | `client.Invoke(ctx, req, timeoutSeconds) *InvokeResponse` |
+| `RegisterListener(ctx, i)` — no return value, dropped invalid/duplicate input silently | `client.RegisterListener(ctx, i) error` — returns `ErrNilListener`/`ErrTooManyTopics`/`ErrInvalidTopic`/`ErrDuplicateListener` |
+| `RegisterChecker(ctx, i)` — no return value | `client.RegisterChecker(ctx, i) error` — returns `ErrNilChecker`/`ErrDuplicateChecker` |
+| `RegisterInvoke(ctx, name, op)` — no return value | `client.RegisterInvoke(ctx, name, op) error` — returns `ErrMethodNameBlank`/`ErrHandlerNil`/`ErrMethodAlreadyRegistered` |
+| `RegisterInternalListeners(ctx)` — mandatory, explicit, easy to forget | gone; `Start` wires it automatically |
+| `StartRedisMqConsumer(ctx)` | `client.Start(ctx) error` — also starts the delay-queue background thread and the invoke keepalive loop, previously separate/manual steps |
+| `StartDelayBackgroundThread(ctx)` | gone; folded into `client.Start(ctx)` |
+| No graceful-shutdown entry point; message handlers ran fully detached | `client.Close(ctx) error` — cancels loops, waits for in-flight handlers bounded by `ctx`, then closes the Redis connection |
+| `ErrConfigNotSet` | gone; structurally unreachable — a `Client` cannot exist without already-validated config |
+| `ErrConfigNil` | gone; `RedisMqConfig` is passed by value, so `New` can never receive a nil config |
+
+### Earlier breaking changes (module `/v2` → `/v3`)
+
+| Before | After |
+| --- | --- |
+| Module path `github.com/Orfeo42/go-redismq/v2` | `github.com/Orfeo42/go-redismq/v3` |
+| Package `go_redismq` | `redismq` |
+| `InvoiceRequest` / `InvoiceResponse` | `InvokeRequest` / `InvokeResponse` |
+| `Assert`, `AssertError`, `Try`, `SystemAssertPrefix` | removed entirely; invalid input returns an error instead of panicking |
+| Printf-style logging (`Debugf("...%s...", x)`) | structured `slog.Attr` fields via the optional `AttrLogger` interface (see below); printf-style `Logger` still works as a fallback |
+| Implicit `func init()` registration | removed; registration is explicit, now automatic only where `Start` performs it itself (the invoke listener) |
+| Functions without `ctx` (e.g. old `Send(message)`) | every entry point takes `context.Context` as its first argument |
+| `RegisterRedisMqConfig` — no return value, panicked on invalid config | config validated eagerly by `New`, returns `error` |
+
+There are no `SendContext`/`SendDelayContext`/`SendTransactionContext` names at any point in this API's history — `Send`, `SendDelay`, and `SendTransaction` themselves took the `ctx` parameter from the `/v3` ctx-first change onward.
 
 # Logger Configuration Guide
 
-The library uses a flexible logger interface that allows you to inject your own logger implementation.
+The library uses a flexible logger interface that allows you to inject your own logger implementation, passed as an `Option` to `New`.
 
 ## Quick Start
 
 ### 1. Default Colored Logger (Recommended for Development)
 
-There is no implicit default logger — until one is set, the library's log calls are silent no-ops. Opt into the built-in colored dev logger with one call:
+There is no implicit default logger — until one is set, the library's log calls are silent no-ops. Opt into the built-in colored dev logger with one option:
 
 ```go
 package main
@@ -199,15 +280,22 @@ package main
 import (
     "context"
 
-    "github.com/Orfeo42/go-redismq/v2"
+    "github.com/Orfeo42/go-redismq/v3"
 )
 
 func main() {
     ctx := context.Background()
 
-    go_redismq.SetLogger(go_redismq.NewDefaultLogger())
+    cfg := redismq.RedisMqConfig{Group: "YourGroup", Addr: "127.0.0.1:6379"}
 
-    go_redismq.StartRedisMqConsumer(ctx)
+    client, err := redismq.New(cfg, redismq.WithLogger(redismq.NewDefaultLogger()))
+    if err != nil {
+        panic(err)
+    }
+
+    if err := client.Start(ctx); err != nil {
+        panic(err)
+    }
 }
 ```
 
@@ -223,8 +311,8 @@ export LOG_LEVEL=ERROR    # Shows only ERROR
 **Output format:**
 
 ```
-[INFO] 2024-01-29 15:04:05 [thread-1] MQStream Start Delay Queue!
-[ERROR] 2024-01-29 15:04:05 [thread-1] [consumer.go:124] MQStream Error...
+[INFO] 2024-01-29 15:04:05 [thread-1] redismq: delay background thread started
+[ERROR] 2024-01-29 15:04:05 [thread-1] [consumer.go:124] redismq: consumer iteration panicked
 ```
 
 ---
@@ -241,11 +329,13 @@ import (
     "log/slog"
     "os"
 
-    "github.com/Orfeo42/go-redismq/v2"
+    "github.com/Orfeo42/go-redismq/v3"
 )
 
 func main() {
     ctx := context.Background()
+
+    cfg := redismq.RedisMqConfig{Group: "YourGroup", Addr: "127.0.0.1:6379"}
 
     // Create JSON logger
     logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -253,8 +343,14 @@ func main() {
         AddSource: false, // Set to true to include source code location
     }))
 
-    go_redismq.SetSlogLogger(logger)
-    go_redismq.StartRedisMqConsumer(ctx)
+    client, err := redismq.New(cfg, redismq.WithSlogLogger(logger))
+    if err != nil {
+        panic(err)
+    }
+
+    if err := client.Start(ctx); err != nil {
+        panic(err)
+    }
 }
 ```
 
@@ -264,7 +360,7 @@ func main() {
 {
   "time": "2024-01-29T15:04:05",
   "level": "INFO",
-  "msg": "MQStream Start Delay Queue!"
+  "msg": "redismq: delay background thread started"
 }
 ```
 
@@ -280,11 +376,13 @@ import (
     "log/slog"
     "os"
 
-    "github.com/Orfeo42/go-redismq/v2"
+    "github.com/Orfeo42/go-redismq/v3"
 )
 
 func main() {
     ctx := context.Background()
+
+    cfg := redismq.RedisMqConfig{Group: "YourGroup", Addr: "127.0.0.1:6379"}
 
     // Open log file
     logFile, err := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
@@ -298,8 +396,14 @@ func main() {
         Level: slog.LevelInfo,
     }))
 
-    go_redismq.SetSlogLogger(logger)
-    go_redismq.StartRedisMqConsumer(ctx)
+    client, err := redismq.New(cfg, redismq.WithSlogLogger(logger))
+    if err != nil {
+        panic(err)
+    }
+
+    if err := client.Start(ctx); err != nil {
+        panic(err)
+    }
 }
 ```
 
@@ -315,22 +419,32 @@ import (
     "log"
     "os"
 
-    "github.com/Orfeo42/go-redismq/v2"
+    "github.com/Orfeo42/go-redismq/v3"
 )
 
 func main() {
     ctx := context.Background()
 
-    logger := log.New(os.Stdout, "[RedisMQ] ", log.LstdFlags)
-    go_redismq.SetStdLogger(logger)
+    cfg := redismq.RedisMqConfig{Group: "YourGroup", Addr: "127.0.0.1:6379"}
 
-    go_redismq.StartRedisMqConsumer(ctx)
+    logger := log.New(os.Stdout, "[RedisMQ] ", log.LstdFlags)
+
+    client, err := redismq.New(cfg, redismq.WithStdLogger(logger))
+    if err != nil {
+        panic(err)
+    }
+
+    if err := client.Start(ctx); err != nil {
+        panic(err)
+    }
 }
 ```
 
 ---
 
 ## Third-Party Logger Integration
+
+The `Logger` interface itself is unchanged from earlier versions — every adapter below still compiles and works with no changes to the adapter type. The only thing that changed is how it is wired in: through `WithLogger(...)` passed to `New`, instead of a runtime `SetLogger(...)` call.
 
 ### 5. Logrus
 
@@ -342,7 +456,7 @@ import (
 
     "github.com/sirupsen/logrus"
 
-    "github.com/Orfeo42/go-redismq/v2"
+    "github.com/Orfeo42/go-redismq/v3"
 )
 
 // Create adapter
@@ -369,14 +483,22 @@ func (l *LogrusAdapter) Errorf(format string, args ...any) {
 func main() {
     ctx := context.Background()
 
+    cfg := redismq.RedisMqConfig{Group: "YourGroup", Addr: "127.0.0.1:6379"}
+
     // Setup logrus
     logrusLogger := logrus.New()
     logrusLogger.SetLevel(logrus.InfoLevel)
     logrusLogger.SetFormatter(&logrus.JSONFormatter{})
 
     // Use adapter
-    go_redismq.SetLogger(&LogrusAdapter{logger: logrusLogger})
-    go_redismq.StartRedisMqConsumer(ctx)
+    client, err := redismq.New(cfg, redismq.WithLogger(&LogrusAdapter{logger: logrusLogger}))
+    if err != nil {
+        panic(err)
+    }
+
+    if err := client.Start(ctx); err != nil {
+        panic(err)
+    }
 }
 ```
 
@@ -392,7 +514,7 @@ import (
 
     "go.uber.org/zap"
 
-    "github.com/Orfeo42/go-redismq/v2"
+    "github.com/Orfeo42/go-redismq/v3"
 )
 
 // Create adapter
@@ -419,13 +541,21 @@ func (l *ZapAdapter) Errorf(format string, args ...any) {
 func main() {
     ctx := context.Background()
 
+    cfg := redismq.RedisMqConfig{Group: "YourGroup", Addr: "127.0.0.1:6379"}
+
     // Setup zap
     zapLogger, _ := zap.NewProduction()
     defer zapLogger.Sync()
 
     // Use adapter
-    go_redismq.SetLogger(&ZapAdapter{sugar: zapLogger.Sugar()})
-    go_redismq.StartRedisMqConsumer(ctx)
+    client, err := redismq.New(cfg, redismq.WithLogger(&ZapAdapter{sugar: zapLogger.Sugar()}))
+    if err != nil {
+        panic(err)
+    }
+
+    if err := client.Start(ctx); err != nil {
+        panic(err)
+    }
 }
 ```
 
@@ -442,7 +572,7 @@ import (
 
     "github.com/rs/zerolog"
 
-    "github.com/Orfeo42/go-redismq/v2"
+    "github.com/Orfeo42/go-redismq/v3"
 )
 
 // Create adapter
@@ -469,12 +599,20 @@ func (l *ZerologAdapter) Errorf(format string, args ...any) {
 func main() {
     ctx := context.Background()
 
+    cfg := redismq.RedisMqConfig{Group: "YourGroup", Addr: "127.0.0.1:6379"}
+
     // Setup zerolog
     zerologLogger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 
     // Use adapter
-    go_redismq.SetLogger(&ZerologAdapter{logger: zerologLogger})
-    go_redismq.StartRedisMqConsumer(ctx)
+    client, err := redismq.New(cfg, redismq.WithLogger(&ZerologAdapter{logger: zerologLogger}))
+    if err != nil {
+        panic(err)
+    }
+
+    if err := client.Start(ctx); err != nil {
+        panic(err)
+    }
 }
 ```
 
@@ -515,7 +653,7 @@ func (l *MyLogger) Errorf(format string, args ...any) {
 }
 
 // Use it
-go_redismq.SetLogger(&MyLogger{})
+client, err := redismq.New(cfg, redismq.WithLogger(&MyLogger{}))
 ```
 
 ---
@@ -524,7 +662,7 @@ go_redismq.SetLogger(&MyLogger{})
 
 The `Logger` interface above is unchanged. Every custom adapter shown in this guide (Logrus, Zap, Zerolog, or your own) keeps compiling and keeps working with no code change.
 
-Internally, the library now emits log events through a second, optional interface that it type-asserts for on every call:
+Internally, the library emits log events through a second, optional interface that it type-asserts for:
 
 ```go
 type AttrLogger interface {
@@ -534,7 +672,7 @@ type AttrLogger interface {
 
 - A logger that implements `AttrLogger` receives a static message plus real `slog.Attr` fields and the request's `context.Context`.
 - A logger that does **not** implement it falls back to the existing printf methods (`Debugf`, `Infof`, `Warnf`, `Errorf`). The fields are rendered into the message as `msg key=value key=value` rather than lost — the only difference is that they are no longer separately queryable in your log aggregator.
-- `SetSlogLogger` upgrades a host to full structured output automatically: the built-in slog adapter implements `AttrLogger` natively, so nothing beyond the version bump is required on the host side.
+- `WithSlogLogger` upgrades a `Client` to full structured output automatically: the built-in slog adapter implements `AttrLogger` natively, so nothing beyond passing the option is required on the host side.
 
 To opt a custom adapter into structured output, implement `LogAttrs` alongside the printf methods:
 
@@ -558,13 +696,13 @@ func (l *ZapAdapter) LogAttrs(ctx context.Context, level slog.Level, msg string,
 
 ### Correct `source`
 
-Previously every library log line reported `source` inside the logger wrapper itself (`logger.go`), because slog captured the program counter at the printf call site, one frame removed from the real caller. The slog adapter now builds its `slog.Record` manually with `runtime.Callers`, so `source` reports the real call site — e.g. `consumer.go`, function `dropMessage` — instead of the wrapper. This is what makes `AddSource: true` (see [JSON Structured Logging](#2-json-structured-logging-recommended-for-production)) worth enabling: the line points at actionable code, not at the library's own logging plumbing.
+Every library log line reports `source` as the real call site inside the package that logged it (e.g. `consumer.go`, function `dropMessage`) rather than the logging plumbing itself. The slog adapter builds its `slog.Record` manually with `runtime.Callers`, skipping exactly the right number of frames depending on whether the call reached it directly (every engine package, and `Client`'s own methods) — this is what makes `AddSource: true` (see [JSON Structured Logging](#2-json-structured-logging-recommended-for-production)) worth enabling: the line points at actionable code, not at the library's own logging wrapper.
 
 ---
 
 ## Structured Log Attributes
 
-Attribute keys emitted alongside library log events are stable and `snake_case`, safe to filter and aggregate on in a log aggregator:
+Attribute keys emitted alongside library log events are stable and `snake_case`, safe to filter and aggregate on in a log aggregator. This is not an exhaustive list of every attribute the library emits — it covers the ones that appear across multiple event types:
 
 | Key | Meaning |
 | --- | --- |
@@ -608,24 +746,35 @@ Level convention:
 
 ## Environment Variables
 
-- `LOG_LEVEL`: Controls the default logger level (DEBUG, INFO, WARN, ERROR)
+- `LOG_LEVEL`: Controls `NewDefaultLogger`'s level (DEBUG, INFO, WARN, ERROR)
   - Default: INFO
   - Example: `export LOG_LEVEL=DEBUG`
 
 ---
 
-## API Functions
+## API Summary
 
 ```go
-// Set custom logger implementing the Logger interface
-func SetLogger(l Logger)
+func New(cfg RedisMqConfig, opts ...Option) (*Client, error)
 
-// Set Go's standard log.Logger
-func SetStdLogger(l *log.Logger)
+func (c *Client) Send(ctx context.Context, m *Message) (bool, error)
+func (c *Client) SendDelay(ctx context.Context, m *Message, delay int64) (bool, error)
+func (c *Client) SendTransaction(ctx context.Context, m *Message, executer func(*Message) (TransactionStatus, error)) (bool, error)
+func (c *Client) Invoke(ctx context.Context, req *InvokeRequest, timeoutSeconds int) *InvokeResponse
+func (c *Client) RegisterListener(ctx context.Context, l IMessageListener) error
+func (c *Client) RegisterChecker(ctx context.Context, ch IMessageChecker) error
+func (c *Client) RegisterInvoke(ctx context.Context, method string, op func(ctx context.Context, request any) (response any, err error)) error
+func (c *Client) Start(ctx context.Context) error
+func (c *Client) Close(ctx context.Context) error
 
-// Set Go's slog.Logger
-func SetSlogLogger(l *slog.Logger)
+type Option func(*settings)
 
-// Get current logger
-func GetLogger() Logger
+func WithLogger(l Logger) Option
+func WithSlogLogger(l *slog.Logger) Option
+func WithStdLogger(l *log.Logger) Option
+func WithTraceIDFromContext(fn func(ctx context.Context) string) Option
+func WithTraceIDToContext(fn func(ctx context.Context, traceID string) context.Context) Option
+func WithClock(c Clock) Option
+
+func NewDefaultLogger() Logger
 ```

@@ -2,17 +2,13 @@
 setup-hooks:
     git config core.hooksPath .hooks
 
-# Run code validation scripts (lint, then deadcode)
+# Run code validation (golangci-lint)
 validate:
     ./.scripts/code-validate.sh
 
 # Run the build and test script
 build-test:
     ./.scripts/build-test.sh
-
-# Report dead/unreachable code (library has no main package, see script for what this checks)
-deadcode:
-    ./.scripts/deadcode-check.sh
 
 # Auto-fix every lint finding the linters can repair themselves
 format dir="./...":
@@ -32,12 +28,12 @@ test-short dir="./...":
 
 # Shellcheck the git hooks and the shell scripts that back them
 lint-sh:
-    shellcheck .hooks/pre-commit .hooks/pre-push .scripts/code-validate.sh .scripts/deadcode-check.sh .scripts/nilaway-check.sh .scripts/build-test.sh
-
-# Report every site where the root error never reaches the logs, or collides with the cause key
-lint-dropped-err dir="./...":
-    go run ./.tools/droppederr/main.go {{ dir }}
+    shellcheck .hooks/pre-commit .hooks/pre-push .scripts/code-validate.sh .scripts/nilaway-check.sh .scripts/build-test.sh .scripts/ai-gen-context.sh
 
 # Report every potential nil-panic site
 lint-nilaway dir="./...":
     ./.scripts/nilaway-check.sh {{ dir }}
+
+# Update all AI context files
+ai-update:
+    @./.scripts/ai-gen-context.sh

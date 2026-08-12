@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -12,6 +13,15 @@ import (
 )
 
 const maxTopics = 60
+
+var (
+	ErrNilListener       = errors.New("redismq: listener is nil")
+	ErrTooManyTopics     = errors.New("redismq: too many topics registered")
+	ErrInvalidTopic      = errors.New("redismq: invalid topic")
+	ErrDuplicateListener = errors.New("redismq: duplicate listener for message key")
+	ErrNilChecker        = errors.New("redismq: checker is nil")
+	ErrDuplicateChecker  = errors.New("redismq: duplicate checker for message key")
+)
 
 type Registry struct {
 	mu         sync.RWMutex
@@ -93,42 +103,38 @@ func IsValidTopic(topic string) bool {
 	return len(topic) > 0 && topic != "*"
 }
 
-func (r *Registry) RegisterListener(ctx context.Context, i mqtype.IMessageListener) {
+func (r *Registry) RegisterListener(ctx context.Context, i mqtype.IMessageListener) error {
 	if i == nil {
-		return
+		return ErrNilListener
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if len(r.topics) > maxTopics {
-		r.attrLogger.LogAttrs(ctx, slog.LevelWarn, "redismq: too many topics registered, merge listeners", slog.Int("topic_count", len(r.topics)))
-
-		return
+		return ErrTooManyTopics
 	}
 
 	if !IsValidTopic(i.GetTopic()) {
-		r.attrLogger.LogAttrs(ctx, slog.LevelWarn, "redismq: invalid topic, listener dropped", slog.String("topic", i.GetTopic()))
-
-		return
+		return ErrInvalidTopic
 	}
 
 	messageKey := streamname.MessageKey(i.GetTopic(), i.GetTag())
 
 	if r.listeners[messageKey] != nil {
-		r.attrLogger.LogAttrs(ctx, slog.LevelWarn, "redismq: duplicate listener for message key, listener dropped", slog.String("message_key", messageKey), slog.String("listener_type", fmt.Sprintf("%T", i)))
-
-		return
+		return ErrDuplicateListener
 	}
 
 	r.listeners[messageKey] = i
 	r.topics = append(r.topics, i.GetTopic())
 	r.attrLogger.LogAttrs(ctx, slog.LevelInfo, "redismq: listener registered", slog.String("message_key", messageKey), slog.String("listener_type", fmt.Sprintf("%T", i)))
+
+	return nil
 }
 
-func (r *Registry) RegisterChecker(ctx context.Context, i mqtype.IMessageChecker) {
+func (r *Registry) RegisterChecker(ctx context.Context, i mqtype.IMessageChecker) error {
 	if i == nil {
-		return
+		return ErrNilChecker
 	}
 
 	messageKey := streamname.MessageKey(i.GetTopic(), i.GetTag())
@@ -137,46 +143,11 @@ func (r *Registry) RegisterChecker(ctx context.Context, i mqtype.IMessageChecker
 	defer r.mu.Unlock()
 
 	if r.checkers[messageKey] != nil {
-		r.attrLogger.LogAttrs(ctx, slog.LevelWarn, "redismq: duplicate checker for message key, checker dropped", slog.String("message_key", messageKey), slog.String("checker_type", fmt.Sprintf("%T", i)))
-
-		return
+		return ErrDuplicateChecker
 	}
 
 	r.checkers[messageKey] = i
 	r.attrLogger.LogAttrs(ctx, slog.LevelInfo, "redismq: checker registered", slog.String("message_key", messageKey), slog.String("checker_type", fmt.Sprintf("%T", i)))
-}
 
-// ResetListenersForTest swaps in empty listener/topic state and returns a
-// closure that restores the original state. It exists so callers outside
-// this package (root's own tests) can isolate registry state around a test
-// without reaching into unexported fields.
-func (r *Registry) ResetListenersForTest() (restore func()) {
-	r.mu.Lock()
-	originalListeners := r.listeners
-	originalTopics := r.topics
-	r.listeners = map[string]mqtype.IMessageListener{}
-	r.topics = make([]string, 0, 100)
-	r.mu.Unlock()
-
-	return func() {
-		r.mu.Lock()
-		r.listeners = originalListeners
-		r.topics = originalTopics
-		r.mu.Unlock()
-	}
-}
-
-// ResetCheckersForTest swaps in empty checker state and returns a closure
-// that restores the original state, mirroring ResetListenersForTest.
-func (r *Registry) ResetCheckersForTest() (restore func()) {
-	r.mu.Lock()
-	originalCheckers := r.checkers
-	r.checkers = map[string]mqtype.IMessageChecker{}
-	r.mu.Unlock()
-
-	return func() {
-		r.mu.Lock()
-		r.checkers = originalCheckers
-		r.mu.Unlock()
-	}
+	return nil
 }
