@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly PROTECTED_BRANCHES=("main")
+readonly CODE_PATTERN='(\.go$|^go\.mod$|^go\.sum$)'
+
+BRANCH="$(git symbolic-ref --short HEAD)"
+readonly BRANCH
+
+for protected in "${PROTECTED_BRANCHES[@]}"; do
+    if [[ "${BRANCH}" == "${protected}" ]]; then
+        echo "❌ ERROR: Direct commits to '${BRANCH}' branch are not allowed!"
+        echo ""
+        echo "Please create a feature branch instead:"
+        echo "  git checkout -b feature/your-feature-name"
+        exit 1
+    fi
+done
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+readonly REPO_ROOT
+
+staged_files="$(git diff --cached --name-only)"
+if grep -qE "${CODE_PATTERN}" <<< "${staged_files}"; then
+    "${REPO_ROOT}/.scripts/code-validate.sh"
+else
+    echo "⏭️  Pre-commit: no code changes; skipping validation."
+fi
+
+echo "✅ Branch check passed: committing to '${BRANCH}'"

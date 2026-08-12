@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly ZERO_SHA="0000000000000000000000000000000000000000"
+readonly CODE_PATTERN='(\.go$|^go\.mod$|^go\.sum$)'
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+readonly REPO_ROOT
+
+STASHED=0
+
+resolve_base() {
+    local sha="$1"
+    local base
+    base="$(git merge-base "${sha}" origin/main 2>/dev/null || true)"
+    printf '%s\n' "${base}"
+}
+
+code_changed() {
+    local local_ref local_sha remote_sha base range
+    while read -r local_ref local_sha _ remote_sha; do
+        if [[ "${local_ref}" == refs/tags/* ]]; then
+            continue
+        fi
+        if [[ "${local_sha}" == "${ZERO_SHA}" ]]; then
+            continue
+        fi
+        if [[ "${remote_sha}" != "${ZERO_SHA}" ]]; then
+            range="${remote_sha}..${local_sha}"
+        else
+            base="$(resolve_base "${local_sha}")"
+            if [[ -z "${base}" ]]; then
+                return 0
+            fi
+            range="${base}..${local_sha}"
+        fi
+        if git diff --name-only "${range}" | grep -qE "${CODE_PATTERN}"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+cleanup() {
+    if [[ "${STASHED}" -eq 1 ]]; then
+        git stash pop
+    fi
+}
+
+if ! code_changed; then
+    echo "⏭️  Pre-push: no code changes; skipping Go build/tests."
+    exit 0
+fi
+
+echo "🚀 Pre-push: Running Go checks..."
+
+stash_name="pre-push-$(date +%s)"
+git stash push -u -m "${stash_name}"
+
+if git stash list | grep -q "${stash_name}"; then
+    STASHED=1
+fi
+
+trap cleanup EXIT
+
+"${REPO_ROOT}/.scripts/code-validate.sh"
+
+"${REPO_ROOT}/.scripts/build-test.sh"
+
+echo "👌 All pre-push checks passed!"
