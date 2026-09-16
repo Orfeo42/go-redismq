@@ -17,7 +17,7 @@
 
 Add the module to your project:
 
-```
+```bash
 go get github.com/Orfeo42/go-redismq/v3
 ```
 
@@ -179,11 +179,11 @@ A `RedisMqConfig` cannot be nil — `New` takes it by value — so there is no e
 
 Registration now fails loudly instead of logging-and-dropping:
 
-| Method | Sentinels |
-| --- | --- |
+| Method             | Sentinels                                                                       |
+| ------------------ | ------------------------------------------------------------------------------- |
 | `RegisterListener` | `ErrNilListener`, `ErrTooManyTopics`, `ErrInvalidTopic`, `ErrDuplicateListener` |
-| `RegisterChecker` | `ErrNilChecker`, `ErrDuplicateChecker` |
-| `RegisterInvoke` | `ErrMethodNameBlank`, `ErrHandlerNil`, `ErrMethodAlreadyRegistered` |
+| `RegisterChecker`  | `ErrNilChecker`, `ErrDuplicateChecker`                                          |
+| `RegisterInvoke`   | `ErrMethodNameBlank`, `ErrHandlerNil`, `ErrMethodAlreadyRegistered`             |
 
 Sending has its own sentinels: `ErrMessageIDNotBlank` (a message with a pre-set `MessageId` was passed to `Send`), `ErrBlankTag` (a message's `Tag` was blank), `ErrDelayNotSupportedInTransaction` (a delayed message was passed to `SendTransaction`), `ErrUnknownTransactionStatus` (a transaction executer returned a `TransactionStatus` other than `CommitTransaction`/`RollbackTransaction`), and `ErrDeliverTimeInThePast` (a delayed message's computed delivery time is not in the future).
 
@@ -208,19 +208,19 @@ Without these options, log lines are still structured but trace-less: the defaul
 
 Run the unit tests:
 
-```
+```bash
 go test ./...
 ```
 
 Two tests (`TestProducerAndConsumer`, `TestMethodInvoke`) are integration tests against a real Redis at `127.0.0.1:6379`. They probe the address with a short-timeout TCP dial and call `t.Skip` if nothing answers, so `go test ./...` passes in an environment with no Redis running — it just skips those two. To skip them unconditionally regardless of whether Redis happens to be reachable, run in short mode:
 
-```
+```bash
 go test -short ./...
 ```
 
 Run with the race detector, as this repository's CI does:
 
-```
+```bash
 go test -race -count=1 ./...
 ```
 
@@ -230,41 +230,41 @@ go test -race -count=1 ./...
 
 Every package-level function and mutable global is gone. A host now calls `redismq.New(cfg, opts...)` once to get a `*Client`, and every operation is a method on it. Multiple `Client`s in the same process are fully independent — they do not share a registry, logger, tracer, or Redis connection.
 
-| Before | After |
-| --- | --- |
-| `RegisterRedisMqConfig(ctx, *RedisMqConfig) error` + package-level state | `redismq.New(cfg RedisMqConfig, opts ...Option) (*Client, error)` |
-| `SetLogger` / `SetStdLogger` / `SetSlogLogger` / `GetLogger` (runtime-mutable) | `WithLogger` / `WithStdLogger` / `WithSlogLogger` passed to `New` (fixed for the `Client`'s lifetime) |
-| `SetTraceIDFromContext` / `SetTraceIDToContext` (runtime-mutable) | `WithTraceIDFromContext` / `WithTraceIDToContext` passed to `New` |
-| `Send(ctx, message)` | `client.Send(ctx, message)` |
-| `SendDelay(ctx, message, delay)` | `client.SendDelay(ctx, message, delay)` |
-| `SendTransaction(ctx, message, executer)` | `client.SendTransaction(ctx, message, executer)` |
-| `Invoke(ctx, req, timeoutSeconds) *InvokeResponse` | `client.Invoke(ctx, req, timeoutSeconds) *InvokeResponse` |
-| `RegisterListener(ctx, i)` — no return value, dropped invalid/duplicate input silently | `client.RegisterListener(ctx, i) error` — returns `ErrNilListener`/`ErrTooManyTopics`/`ErrInvalidTopic`/`ErrDuplicateListener` |
-| `RegisterChecker(ctx, i)` — no return value | `client.RegisterChecker(ctx, i) error` — returns `ErrNilChecker`/`ErrDuplicateChecker` |
-| `RegisterInvoke(ctx, name, op)` — no return value | `client.RegisterInvoke(ctx, name, op) error` — returns `ErrMethodNameBlank`/`ErrHandlerNil`/`ErrMethodAlreadyRegistered` |
-| `RegisterInternalListeners(ctx)` — mandatory, explicit, easy to forget | gone; `Start` wires it automatically |
-| `StartRedisMqConsumer(ctx)` | `client.Start(ctx) error` — also starts the delay-queue background thread and the invoke keepalive loop, previously separate/manual steps |
-| `StartDelayBackgroundThread(ctx)` | gone; folded into `client.Start(ctx)` |
-| No graceful-shutdown entry point; message handlers ran fully detached | `client.Close(ctx) error` — cancels loops, waits for in-flight handlers bounded by `ctx`, then closes the Redis connection |
-| `ErrConfigNotSet` | gone; structurally unreachable — a `Client` cannot exist without already-validated config |
-| `ErrConfigNil` | gone; `RedisMqConfig` is passed by value, so `New` can never receive a nil config |
+| Before                                                                                 | After                                                                                                                                     |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `RegisterRedisMqConfig(ctx, *RedisMqConfig) error` + package-level state               | `redismq.New(cfg RedisMqConfig, opts ...Option) (*Client, error)`                                                                         |
+| `SetLogger` / `SetStdLogger` / `SetSlogLogger` / `GetLogger` (runtime-mutable)         | `WithLogger` / `WithStdLogger` / `WithSlogLogger` passed to `New` (fixed for the `Client`'s lifetime)                                     |
+| `SetTraceIDFromContext` / `SetTraceIDToContext` (runtime-mutable)                      | `WithTraceIDFromContext` / `WithTraceIDToContext` passed to `New`                                                                         |
+| `Send(ctx, message)`                                                                   | `client.Send(ctx, message)`                                                                                                               |
+| `SendDelay(ctx, message, delay)`                                                       | `client.SendDelay(ctx, message, delay)`                                                                                                   |
+| `SendTransaction(ctx, message, executer)`                                              | `client.SendTransaction(ctx, message, executer)`                                                                                          |
+| `Invoke(ctx, req, timeoutSeconds) *InvokeResponse`                                     | `client.Invoke(ctx, req, timeoutSeconds) *InvokeResponse`                                                                                 |
+| `RegisterListener(ctx, i)` — no return value, dropped invalid/duplicate input silently | `client.RegisterListener(ctx, i) error` — returns `ErrNilListener`/`ErrTooManyTopics`/`ErrInvalidTopic`/`ErrDuplicateListener`            |
+| `RegisterChecker(ctx, i)` — no return value                                            | `client.RegisterChecker(ctx, i) error` — returns `ErrNilChecker`/`ErrDuplicateChecker`                                                    |
+| `RegisterInvoke(ctx, name, op)` — no return value                                      | `client.RegisterInvoke(ctx, name, op) error` — returns `ErrMethodNameBlank`/`ErrHandlerNil`/`ErrMethodAlreadyRegistered`                  |
+| `RegisterInternalListeners(ctx)` — mandatory, explicit, easy to forget                 | gone; `Start` wires it automatically                                                                                                      |
+| `StartRedisMqConsumer(ctx)`                                                            | `client.Start(ctx) error` — also starts the delay-queue background thread and the invoke keepalive loop, previously separate/manual steps |
+| `StartDelayBackgroundThread(ctx)`                                                      | gone; folded into `client.Start(ctx)`                                                                                                     |
+| No graceful-shutdown entry point; message handlers ran fully detached                  | `client.Close(ctx) error` — cancels loops, waits for in-flight handlers bounded by `ctx`, then closes the Redis connection                |
+| `ErrConfigNotSet`                                                                      | gone; structurally unreachable — a `Client` cannot exist without already-validated config                                                 |
+| `ErrConfigNil`                                                                         | gone; `RedisMqConfig` is passed by value, so `New` can never receive a nil config                                                         |
 
 ### Earlier breaking changes (module `/v2` → `/v3`)
 
-| Before | After |
-| --- | --- |
-| Module path `github.com/Orfeo42/go-redismq/v2` | `github.com/Orfeo42/go-redismq/v3` |
-| Package `go_redismq` | `redismq` |
-| `InvoiceRequest` / `InvoiceResponse` | `InvokeRequest` / `InvokeResponse` |
-| `Assert`, `AssertError`, `Try`, `SystemAssertPrefix` | removed entirely; invalid input returns an error instead of panicking |
-| Printf-style logging (`Debugf("...%s...", x)`) | structured `slog.Attr` fields via the optional `AttrLogger` interface (see below); printf-style `Logger` still works as a fallback |
-| Implicit `func init()` registration | removed; registration is explicit, now automatic only where `Start` performs it itself (the invoke listener) |
-| Functions without `ctx` (e.g. old `Send(message)`) | every entry point takes `context.Context` as its first argument |
-| `RegisterRedisMqConfig` — no return value, panicked on invalid config | config validated eagerly by `New`, returns `error` |
+| Before                                                                | After                                                                                                                              |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Module path `github.com/Orfeo42/go-redismq/v2`                        | `github.com/Orfeo42/go-redismq/v3`                                                                                                 |
+| Package `go_redismq`                                                  | `redismq`                                                                                                                          |
+| `InvoiceRequest` / `InvoiceResponse`                                  | `InvokeRequest` / `InvokeResponse`                                                                                                 |
+| `Assert`, `AssertError`, `Try`, `SystemAssertPrefix`                  | removed entirely; invalid input returns an error instead of panicking                                                              |
+| Printf-style logging (`Debugf("...%s...", x)`)                        | structured `slog.Attr` fields via the optional `AttrLogger` interface (see below); printf-style `Logger` still works as a fallback |
+| Implicit `func init()` registration                                   | removed; registration is explicit, now automatic only where `Start` performs it itself (the invoke listener)                       |
+| Functions without `ctx` (e.g. old `Send(message)`)                    | every entry point takes `context.Context` as its first argument                                                                    |
+| `RegisterRedisMqConfig` — no return value, panicked on invalid config | config validated eagerly by `New`, returns `error`                                                                                 |
 
 There are no `SendContext`/`SendDelayContext`/`SendTransactionContext` names at any point in this API's history — `Send`, `SendDelay`, and `SendTransaction` themselves took the `ctx` parameter from the `/v3` ctx-first change onward.
 
-# Logger Configuration Guide
+## Logger Configuration Guide
 
 The library uses a flexible logger interface that allows you to inject your own logger implementation, passed as an `Option` to `New`.
 
@@ -310,7 +310,7 @@ export LOG_LEVEL=ERROR    # Shows only ERROR
 
 **Output format:**
 
-```
+```bash
 [INFO] 2024-01-29 15:04:05 [thread-1] redismq: delay background thread started
 [ERROR] 2024-01-29 15:04:05 [thread-1] [consumer.go:124] redismq: consumer iteration panicked
 ```
@@ -704,22 +704,22 @@ Every library log line reports `source` as the real call site inside the package
 
 Attribute keys emitted alongside library log events are stable and `snake_case`, safe to filter and aggregate on in a log aggregator. This is not an exhaustive list of every attribute the library emits — it covers the ones that appear across multiple event types:
 
-| Key | Meaning |
-| --- | --- |
-| `topic` | Message topic |
-| `tag` | Message tag |
-| `message_id` | Redis stream message ID |
-| `message_key` | Caller-supplied dedupe/business key, when set |
-| `consumer_group` | Redis consumer group name |
-| `consumer_name` | Consumer instance identifier (resolved from the local IPv4 address) |
-| `stream` | Redis stream name backing the topic |
-| `reconsume_times` | Number of times this message has been redelivered |
-| `reconsume_max` | Per-message redelivery cap set by the sender |
+| Key               | Meaning                                                                         |
+| ----------------- | ------------------------------------------------------------------------------- |
+| `topic`           | Message topic                                                                   |
+| `tag`             | Message tag                                                                     |
+| `message_id`      | Redis stream message ID                                                         |
+| `message_key`     | Caller-supplied dedupe/business key, when set                                   |
+| `consumer_group`  | Redis consumer group name                                                       |
+| `consumer_name`   | Consumer instance identifier (resolved from the local IPv4 address)             |
+| `stream`          | Redis stream name backing the topic                                             |
+| `reconsume_times` | Number of times this message has been redelivered                               |
+| `reconsume_max`   | Per-message redelivery cap set by the sender                                    |
 | `reconsume_limit` | Effective redelivery ceiling applied by the consumer (`max(40, reconsume_max)`) |
-| `cost_ms` | Milliseconds between send and consume |
-| `trace_id` | Trace id read from the message, when present |
-| `cause` | The root-cause error value |
-| `stack` | Captured call stack, only on recovered panics |
+| `cost_ms`         | Milliseconds between send and consume                                           |
+| `trace_id`        | Trace id read from the message, when present                                    |
+| `cause`           | The root-cause error value                                                      |
+| `stack`           | Captured call stack, only on recovered panics                                   |
 
 Two rules apply library-wide:
 
