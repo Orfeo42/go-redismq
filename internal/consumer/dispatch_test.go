@@ -123,6 +123,7 @@ func newTestConsumer(
 
 	c := New(
 		func() (Redis, error) { return redisClient, nil },
+		nil,
 		log,
 		registry,
 		delayScheduler,
@@ -371,6 +372,31 @@ func TestMessageAck(t *testing.T) {
 		require.Equal(t, []string{"42-0"}, pipe.xdelCalls[0].ids)
 	})
 
+	t.Run("cancelled context still acks and deletes", func(t *testing.T) {
+		pipe := &fakePipeliner{}
+
+		var pipelineCtxErr error
+
+		mockRedis := &RedisMock{
+			PipelinedFunc: func(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+				pipelineCtxErr = ctx.Err()
+
+				return nil, fn(pipe)
+			},
+		}
+
+		c, _ := newTestConsumer(mockRedis, &ListenerRegistryMock{}, &DelaySchedulerMock{}, "GID_Test", time.Unix(0, 0))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		c.messageAck(ctx, &mqtype.Message{Topic: "t", Tag: "tag1", MessageId: "42-0"})
+
+		require.NoError(t, pipelineCtxErr)
+		require.Len(t, pipe.xackCalls, 1)
+		require.Len(t, pipe.xdelCalls, 1)
+	})
+
 	t.Run("pipeline error is logged with cause and does not panic", func(t *testing.T) {
 		mockRedis := &RedisMock{
 			PipelinedFunc: func(_ context.Context, _ func(redis.Pipeliner) error) ([]redis.Cmder, error) {
@@ -395,6 +421,7 @@ func TestMessageAck(t *testing.T) {
 
 		c := New(
 			func() (Redis, error) { panic("boom") },
+			nil,
 			log,
 			&ListenerRegistryMock{},
 			&DelaySchedulerMock{},
@@ -423,6 +450,43 @@ func TestMessageAck(t *testing.T) {
 		}
 
 		require.True(t, found, "expected a log record with a cause attr")
+	})
+}
+
+func TestResumeOrLoseMessage(t *testing.T) {
+	t.Run("cancelled context still schedules the retry", func(t *testing.T) {
+		var scheduleCtxErr error
+
+		delayScheduler := &DelaySchedulerMock{
+			ScheduleDelayFunc: func(ctx context.Context, _ *mqtype.Message, _ int64) (bool, error) {
+				scheduleCtxErr = ctx.Err()
+
+				return true, nil
+			},
+		}
+
+		pipe := &fakePipeliner{}
+
+		var pipelineCtxErr error
+
+		mockRedis := &RedisMock{
+			PipelinedFunc: func(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+				pipelineCtxErr = ctx.Err()
+
+				return nil, fn(pipe)
+			},
+		}
+
+		c, _ := newTestConsumer(mockRedis, &ListenerRegistryMock{}, delayScheduler, "GID_Test", time.Unix(0, 0))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		c.resumeOrLoseMessage(ctx, &mqtype.Message{Topic: "t", Tag: "tag1", MessageId: "42-0"})
+
+		require.NoError(t, scheduleCtxErr)
+		require.NoError(t, pipelineCtxErr)
+		require.Len(t, pipe.xackCalls, 1)
 	})
 }
 
@@ -731,6 +795,7 @@ func TestStartScheduleTrimStreamIteration(t *testing.T) {
 
 		c := New(
 			func() (Redis, error) { return mockRedis, nil },
+			nil,
 			log,
 			registry,
 			&DelaySchedulerMock{},

@@ -16,7 +16,12 @@ import (
 	"github.com/Orfeo42/go-redismq/v3/internal/streamname"
 )
 
-const messageExpireAfter = 1000 * 60 * 60 * 24 * 3
+const (
+	messageExpireAfter   = 1000 * 60 * 60 * 24 * 3
+	unblockRetryInterval = 100 * time.Millisecond
+	readBlock            = 60 * time.Second
+	fallbackReadBlock    = 5 * time.Second
+)
 
 //go:generate moq -out redis_mock.go . Redis
 type Redis interface {
@@ -24,9 +29,16 @@ type Redis interface {
 	XInfoGroups(ctx context.Context, key string) *redis.XInfoGroupsCmd
 	XGroupCreateMkStream(ctx context.Context, stream, group, start string) *redis.StatusCmd
 	XGroupCreateConsumer(ctx context.Context, stream, group, consumer string) *redis.IntCmd
-	XReadGroup(ctx context.Context, a *redis.XReadGroupArgs) *redis.XStreamSliceCmd
+	ClientUnblock(ctx context.Context, id int64) *redis.IntCmd
 	Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error)
 	XTrimMaxLen(ctx context.Context, key string, maxLen int64) *redis.IntCmd
+}
+
+//go:generate moq -out stream_reader_mock.go . StreamReader
+type StreamReader interface {
+	ClientID(ctx context.Context) *redis.IntCmd
+	XReadGroup(ctx context.Context, a *redis.XReadGroupArgs) *redis.XStreamSliceCmd
+	Close() error
 }
 
 //go:generate moq -out listener_registry_mock.go . ListenerRegistry
@@ -62,16 +74,17 @@ func (systemClock) Now() time.Time { return time.Now() }
 var ErrConsumerNameUnresolved = errors.New("redismq: consumer name could not be resolved")
 
 type Consumer struct {
-	resolveRedis func() (Redis, error)
-	log          logging.AttrLogger
-	registry     ListenerRegistry
-	delayQueue   DelayScheduler
-	txChecker    TransactionChecker
-	tracer       Tracer
-	group        func() string
-	clock        Clock
-	wg           *sync.WaitGroup
-	streamMaxLen int64
+	resolveRedis    func() (Redis, error)
+	newStreamReader func() StreamReader
+	log             logging.AttrLogger
+	registry        ListenerRegistry
+	delayQueue      DelayScheduler
+	txChecker       TransactionChecker
+	tracer          Tracer
+	group           func() string
+	clock           Clock
+	wg              *sync.WaitGroup
+	streamMaxLen    int64
 
 	nameMu sync.RWMutex
 	name   string
@@ -79,6 +92,7 @@ type Consumer struct {
 
 func New(
 	resolveRedis func() (Redis, error),
+	newStreamReader func() StreamReader,
 	log logging.AttrLogger,
 	registry ListenerRegistry,
 	delayQueue DelayScheduler,
@@ -98,16 +112,17 @@ func New(
 	}
 
 	return &Consumer{
-		resolveRedis: resolveRedis,
-		log:          log,
-		registry:     registry,
-		delayQueue:   delayQueue,
-		txChecker:    txChecker,
-		tracer:       tracer,
-		group:        group,
-		clock:        clock,
-		wg:           wg,
-		streamMaxLen: streamMaxLen,
+		resolveRedis:    resolveRedis,
+		newStreamReader: newStreamReader,
+		log:             log,
+		registry:        registry,
+		delayQueue:      delayQueue,
+		txChecker:       txChecker,
+		tracer:          tracer,
+		group:           group,
+		clock:           clock,
+		wg:              wg,
+		streamMaxLen:    streamMaxLen,
 	}
 }
 
@@ -138,7 +153,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 	}
 
 	deathQueueName := streamname.DeathQueue()
-	c.createStreamGroup(ctx, deathQueueName, "death_message")
+	c.createStreamGroup(ctx, deathQueueName)
 	c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: death queue initialized", slog.String("stream", deathQueueName))
 
 	c.wg.Add(1)
@@ -197,12 +212,12 @@ func (c *Consumer) resolveConsumerNameFromInterface(ctx context.Context, face ne
 	}
 }
 
-func (c *Consumer) createStreamGroup(ctx context.Context, queueName string, topic string) {
-	c.tryCreateGroup(ctx, queueName, topic)
+func (c *Consumer) createStreamGroup(ctx context.Context, queueName string) {
+	c.tryCreateGroup(ctx, queueName)
 	c.tryCreateConsumer(ctx, queueName)
 }
 
-func (c *Consumer) tryCreateGroup(ctx context.Context, queueName string, topic string) {
+func (c *Consumer) tryCreateGroup(ctx context.Context, queueName string) {
 	defer func() {
 		if exception := recover(); exception != nil {
 			err := logattr.PanicError(exception)
@@ -220,27 +235,7 @@ func (c *Consumer) tryCreateGroup(ctx context.Context, queueName string, topic s
 		return
 	}
 
-	message := &mqtype.Message{
-		Topic: topic,
-		Tag:   mqtype.TagBlank,
-		Body:  "test",
-	}
-
 	grp := c.group()
-
-	streamAddArgs, err := message.ToStreamAddArgsValues(queueName, c.streamMaxLen)
-	if err != nil {
-		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: group setup probe message marshal failed",
-			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic), logattr.CauseAttr(err))
-
-		return
-	}
-
-	_, err = client.XAdd(ctx, streamAddArgs).Result()
-	if err != nil {
-		c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: group setup probe message failed, group may already exist",
-			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic), logattr.CauseAttr(err))
-	}
 
 	found := false
 
@@ -255,15 +250,15 @@ func (c *Consumer) tryCreateGroup(ctx context.Context, queueName string, topic s
 		return
 	}
 
-	if err := client.XGroupCreateMkStream(ctx, queueName, grp, "$").Err(); err != nil {
+	if err := client.XGroupCreateMkStream(ctx, queueName, grp, "0").Err(); err != nil {
 		c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: create consumer group failed, group likely exists",
-			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic), logattr.CauseAttr(err))
+			slog.String("stream", queueName), slog.String("consumer_group", grp), logattr.CauseAttr(err))
 
 		return
 	}
 
 	c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: consumer group initialized",
-		slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic))
+		slog.String("stream", queueName), slog.String("consumer_group", grp))
 }
 
 func (c *Consumer) tryCreateConsumer(ctx context.Context, queueName string) {
@@ -305,9 +300,9 @@ func (c *Consumer) innerLoadConsumer(ctx context.Context) {
 }
 
 func (c *Consumer) blockConsumerTopic(ctx context.Context, topic string) {
-	c.createStreamGroup(ctx, streamname.Queue(topic), topic)
+	c.createStreamGroup(ctx, streamname.Queue(topic))
 
-	c.createStreamGroup(ctx, streamname.BackupQueue(topic), topic)
+	c.createStreamGroup(ctx, streamname.BackupQueue(topic))
 
 	c.wg.Add(1)
 
@@ -334,6 +329,23 @@ func (c *Consumer) loopConsumer(ctx context.Context, topic string) {
 		return
 	}
 
+	reader := c.newStreamReader()
+
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: stream reader close failed", slog.String("topic", topic), logattr.CauseAttr(closeErr))
+		}
+	}()
+
+	block := readBlock
+
+	stopUnblocker := c.startUnblocker(ctx, client, reader, topic)
+	if stopUnblocker == nil {
+		block = fallbackReadBlock
+	} else {
+		defer stopUnblocker()
+	}
+
 	for {
 		if ctx.Err() != nil {
 			c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: consumer loop stopped, context cancelled")
@@ -341,11 +353,58 @@ func (c *Consumer) loopConsumer(ctx context.Context, topic string) {
 			return
 		}
 
-		c.customerIteration(ctx, client, topic)
+		c.customerIteration(ctx, reader, topic, block)
 	}
 }
 
-func (c *Consumer) customerIteration(ctx context.Context, client Redis, topic string) {
+func (c *Consumer) startUnblocker(ctx context.Context, client Redis, reader StreamReader, topic string) func() {
+	id, err := reader.ClientID(ctx).Result()
+	if err != nil {
+		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: stream reader client id failed", slog.String("topic", topic), logattr.CauseAttr(err))
+
+		return nil
+	}
+
+	if unblockErr := client.ClientUnblock(ctx, id).Err(); unblockErr != nil {
+		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: stream reader unblock unavailable, using short read block",
+			slog.String("topic", topic), slog.Int64("client_id", id), logattr.CauseAttr(unblockErr))
+
+		return nil
+	}
+
+	done := make(chan struct{})
+	finished := make(chan struct{})
+
+	go func() {
+		defer close(finished)
+
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+		}
+
+		for {
+			if unblockErr := client.ClientUnblock(context.WithoutCancel(ctx), id).Err(); unblockErr != nil {
+				c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: stream reader unblock failed",
+					slog.String("topic", topic), slog.Int64("client_id", id), logattr.CauseAttr(unblockErr))
+			}
+
+			select {
+			case <-done:
+				return
+			case <-time.After(unblockRetryInterval):
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+		<-finished
+	}
+}
+
+func (c *Consumer) customerIteration(ctx context.Context, reader StreamReader, topic string, block time.Duration) {
 	defer func() {
 		if exception := recover(); exception != nil {
 			err := logattr.PanicError(exception)
@@ -356,7 +415,7 @@ func (c *Consumer) customerIteration(ctx context.Context, client Redis, topic st
 
 	count := 0
 
-	message := c.blockReceiveConsumerMessage(ctx, client, topic)
+	message := c.blockReceiveConsumerMessage(ctx, reader, topic, block)
 	if message != nil {
 		c.dispatchConsumerMessage(ctx, message)
 
@@ -368,7 +427,7 @@ func (c *Consumer) customerIteration(ctx context.Context, client Redis, topic st
 	}
 }
 
-func (c *Consumer) blockReceiveConsumerMessage(ctx context.Context, client Redis, topic string) *mqtype.Message {
+func (c *Consumer) blockReceiveConsumerMessage(ctx context.Context, reader StreamReader, topic string, block time.Duration) *mqtype.Message {
 	defer func() {
 		if exception := recover(); exception != nil {
 			err := logattr.PanicError(exception)
@@ -381,15 +440,19 @@ func (c *Consumer) blockReceiveConsumerMessage(ctx context.Context, client Redis
 
 	streamName := streamname.Queue(topic)
 
-	result, err := client.XReadGroup(ctx, &redis.XReadGroupArgs{
+	result, err := reader.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    c.group(),
 		Consumer: c.getConsumerName(),
 		Streams:  []string{streamName, ">"},
 		Count:    1,
-		Block:    60 * time.Second,
+		Block:    block,
 		NoAck:    true,
 	}).Result()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+
 		if errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) {
 			return nil
 		}

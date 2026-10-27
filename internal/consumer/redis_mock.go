@@ -19,6 +19,9 @@ var _ Redis = &RedisMock{}
 //
 //		// make and configure a mocked Redis
 //		mockedRedis := &RedisMock{
+//			ClientUnblockFunc: func(ctx context.Context, id int64) *redis.IntCmd {
+//				panic("mock out the ClientUnblock method")
+//			},
 //			PipelinedFunc: func(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
 //				panic("mock out the Pipelined method")
 //			},
@@ -34,9 +37,6 @@ var _ Redis = &RedisMock{}
 //			XInfoGroupsFunc: func(ctx context.Context, key string) *redis.XInfoGroupsCmd {
 //				panic("mock out the XInfoGroups method")
 //			},
-//			XReadGroupFunc: func(ctx context.Context, a *redis.XReadGroupArgs) *redis.XStreamSliceCmd {
-//				panic("mock out the XReadGroup method")
-//			},
 //			XTrimMaxLenFunc: func(ctx context.Context, key string, maxLen int64) *redis.IntCmd {
 //				panic("mock out the XTrimMaxLen method")
 //			},
@@ -47,6 +47,9 @@ var _ Redis = &RedisMock{}
 //
 //	}
 type RedisMock struct {
+	// ClientUnblockFunc mocks the ClientUnblock method.
+	ClientUnblockFunc func(ctx context.Context, id int64) *redis.IntCmd
+
 	// PipelinedFunc mocks the Pipelined method.
 	PipelinedFunc func(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error)
 
@@ -62,14 +65,18 @@ type RedisMock struct {
 	// XInfoGroupsFunc mocks the XInfoGroups method.
 	XInfoGroupsFunc func(ctx context.Context, key string) *redis.XInfoGroupsCmd
 
-	// XReadGroupFunc mocks the XReadGroup method.
-	XReadGroupFunc func(ctx context.Context, a *redis.XReadGroupArgs) *redis.XStreamSliceCmd
-
 	// XTrimMaxLenFunc mocks the XTrimMaxLen method.
 	XTrimMaxLenFunc func(ctx context.Context, key string, maxLen int64) *redis.IntCmd
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// ClientUnblock holds details about calls to the ClientUnblock method.
+		ClientUnblock []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ID is the id argument value.
+			ID int64
+		}
 		// Pipelined holds details about calls to the Pipelined method.
 		Pipelined []struct {
 			// Ctx is the ctx argument value.
@@ -113,13 +120,6 @@ type RedisMock struct {
 			// Key is the key argument value.
 			Key string
 		}
-		// XReadGroup holds details about calls to the XReadGroup method.
-		XReadGroup []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// A is the a argument value.
-			A *redis.XReadGroupArgs
-		}
 		// XTrimMaxLen holds details about calls to the XTrimMaxLen method.
 		XTrimMaxLen []struct {
 			// Ctx is the ctx argument value.
@@ -130,13 +130,49 @@ type RedisMock struct {
 			MaxLen int64
 		}
 	}
+	lockClientUnblock        sync.RWMutex
 	lockPipelined            sync.RWMutex
 	lockXAdd                 sync.RWMutex
 	lockXGroupCreateConsumer sync.RWMutex
 	lockXGroupCreateMkStream sync.RWMutex
 	lockXInfoGroups          sync.RWMutex
-	lockXReadGroup           sync.RWMutex
 	lockXTrimMaxLen          sync.RWMutex
+}
+
+// ClientUnblock calls ClientUnblockFunc.
+func (mock *RedisMock) ClientUnblock(ctx context.Context, id int64) *redis.IntCmd {
+	if mock.ClientUnblockFunc == nil {
+		panic("RedisMock.ClientUnblockFunc: method is nil but Redis.ClientUnblock was just called")
+	}
+	callInfo := struct {
+		Ctx context.Context
+		ID  int64
+	}{
+		Ctx: ctx,
+		ID:  id,
+	}
+	mock.lockClientUnblock.Lock()
+	mock.calls.ClientUnblock = append(mock.calls.ClientUnblock, callInfo)
+	mock.lockClientUnblock.Unlock()
+	return mock.ClientUnblockFunc(ctx, id)
+}
+
+// ClientUnblockCalls gets all the calls that were made to ClientUnblock.
+// Check the length with:
+//
+//	len(mockedRedis.ClientUnblockCalls())
+func (mock *RedisMock) ClientUnblockCalls() []struct {
+	Ctx context.Context
+	ID  int64
+} {
+	var calls []struct {
+		Ctx context.Context
+		ID  int64
+	}
+	mock.lockClientUnblock.RLock()
+	calls = mock.calls.ClientUnblock
+	mock.lockClientUnblock.RUnlock()
+	return calls
 }
 
 // Pipelined calls PipelinedFunc.
@@ -332,42 +368,6 @@ func (mock *RedisMock) XInfoGroupsCalls() []struct {
 	mock.lockXInfoGroups.RLock()
 	calls = mock.calls.XInfoGroups
 	mock.lockXInfoGroups.RUnlock()
-	return calls
-}
-
-// XReadGroup calls XReadGroupFunc.
-func (mock *RedisMock) XReadGroup(ctx context.Context, a *redis.XReadGroupArgs) *redis.XStreamSliceCmd {
-	if mock.XReadGroupFunc == nil {
-		panic("RedisMock.XReadGroupFunc: method is nil but Redis.XReadGroup was just called")
-	}
-	callInfo := struct {
-		Ctx context.Context
-		A   *redis.XReadGroupArgs
-	}{
-		Ctx: ctx,
-		A:   a,
-	}
-	mock.lockXReadGroup.Lock()
-	mock.calls.XReadGroup = append(mock.calls.XReadGroup, callInfo)
-	mock.lockXReadGroup.Unlock()
-	return mock.XReadGroupFunc(ctx, a)
-}
-
-// XReadGroupCalls gets all the calls that were made to XReadGroup.
-// Check the length with:
-//
-//	len(mockedRedis.XReadGroupCalls())
-func (mock *RedisMock) XReadGroupCalls() []struct {
-	Ctx context.Context
-	A   *redis.XReadGroupArgs
-} {
-	var calls []struct {
-		Ctx context.Context
-		A   *redis.XReadGroupArgs
-	}
-	mock.lockXReadGroup.RLock()
-	calls = mock.calls.XReadGroup
-	mock.lockXReadGroup.RUnlock()
 	return calls
 }
 

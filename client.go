@@ -86,6 +86,7 @@ func New(cfg RedisMqConfig, opts ...Option) (*Client, error) {
 
 	c.consumer = consumer.New(
 		func() (consumer.Redis, error) { return redisClient, nil },
+		func() consumer.StreamReader { return redisClient.Conn() },
 		logAttr, reg, c.delayQueue, txCheck, tracer, group, s.clock, &c.wg, s.streamMaxLen,
 	)
 

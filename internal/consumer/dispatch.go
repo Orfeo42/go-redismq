@@ -129,8 +129,10 @@ func (c *Consumer) consumeMessage(ctx context.Context, listener mqtype.IMessageL
 }
 
 func (c *Consumer) resumeOrLoseMessage(ctx context.Context, message *mqtype.Message) {
-	if c.pushTaskToResumeLater(ctx, message) {
-		c.messageAck(ctx, message)
+	settleCtx := context.WithoutCancel(ctx)
+
+	if c.pushTaskToResumeLater(settleCtx, message) {
+		c.messageAck(settleCtx, message)
 
 		return
 	}
@@ -154,11 +156,13 @@ func consumerDelay(message *mqtype.Message) time.Duration {
 }
 
 func (c *Consumer) messageAck(ctx context.Context, message *mqtype.Message) {
+	settleCtx := context.WithoutCancel(ctx)
+
 	defer func() {
 		if exception := recover(); exception != nil {
 			err := logattr.PanicError(exception)
 
-			c.log.LogAttrs(ctx, slog.LevelError, "redismq: message ack panicked", append(logattr.MessageAttrs(message), logattr.CauseAttr(err), logattr.StackAttr(2))...)
+			c.log.LogAttrs(settleCtx, slog.LevelError, "redismq: message ack panicked", append(logattr.MessageAttrs(message), logattr.CauseAttr(err), logattr.StackAttr(2))...)
 
 			return
 		}
@@ -166,7 +170,7 @@ func (c *Consumer) messageAck(ctx context.Context, message *mqtype.Message) {
 
 	client, err := c.resolveRedis()
 	if err != nil {
-		c.log.LogAttrs(ctx, slog.LevelError, "redismq: redis config not registered", logattr.CauseAttr(err))
+		c.log.LogAttrs(settleCtx, slog.LevelError, "redismq: redis config not registered", logattr.CauseAttr(err))
 
 		return
 	}
@@ -175,19 +179,19 @@ func (c *Consumer) messageAck(ctx context.Context, message *mqtype.Message) {
 
 	var ackCmd, delCmd *redis.IntCmd
 
-	_, err = client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-		ackCmd = pipe.XAck(ctx, streamName, c.group(), message.MessageId)
-		delCmd = pipe.XDel(ctx, streamName, message.MessageId)
+	_, err = client.Pipelined(settleCtx, func(pipe redis.Pipeliner) error {
+		ackCmd = pipe.XAck(settleCtx, streamName, c.group(), message.MessageId)
+		delCmd = pipe.XDel(settleCtx, streamName, message.MessageId)
 
 		return nil
 	})
 	if err != nil {
-		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: message ack failed", append(logattr.MessageAttrs(message), logattr.CauseAttr(err))...)
+		c.log.LogAttrs(settleCtx, slog.LevelWarn, "redismq: message ack failed", append(logattr.MessageAttrs(message), logattr.CauseAttr(err))...)
 
 		return
 	}
 
-	c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: message acked",
+	c.log.LogAttrs(settleCtx, slog.LevelInfo, "redismq: message acked",
 		slog.String("message_id", message.MessageId), slog.String("stream", streamName),
 		slog.Int64("ack_result", ackCmd.Val()), slog.Int64("deleted", delCmd.Val()))
 }

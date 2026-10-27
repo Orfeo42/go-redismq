@@ -132,7 +132,7 @@ if err := client.Start(ctx); err != nil {
 cancel() // or call client.Close(closeCtx) directly, see below
 ```
 
-Cancelling the context (or calling `Close`, which cancels it internally) shuts the library down in an orderly way: the consume loops, the delay-queue poller, the trim scheduler, and the invoke keepalive loop all exit on cancellation, and the 60-second blocking stream read (`XReadGroup` with `Block: 60 * time.Second`) unblocks immediately instead of waiting out its timeout. Cancellation is treated as a normal shutdown, not a fault — it does not produce error-level log noise.
+Cancelling the context (or calling `Close`, which cancels it internally) shuts the library down in an orderly way: the consume loops, the delay-queue poller, the trim scheduler, and the invoke keepalive loop all exit on cancellation, and the 60-second blocking stream read (`XReadGroup` with `Block: 60 * time.Second`) unblocks immediately instead of waiting out its timeout: each topic's blocking read runs on its own connection and cancellation sends `CLIENT UNBLOCK` for it, so the read returns right away. This requires the Redis user to be allowed `CLIENT ID` and `CLIENT UNBLOCK` (ACL `+client|id +client|unblock`); without them a warning is logged once per topic at startup and the read block drops to 5 seconds, so shutdown waits at most ~5 s. In-flight handlers drained by `Close` still ack/delete or re-queue their message even though the context is cancelled. Cancellation is treated as a normal shutdown, not a fault — it does not produce error-level log noise.
 
 `Close(ctx)` is the supported shutdown path and does three things in order:
 
@@ -203,6 +203,8 @@ The consumer acknowledges and deletes (`XACK` + `XDEL` in one pipeline) a stream
 - no listener is registered for the message
 - the message expired (older than 3 days)
 - a broadcast message was received in group consumption
+
+A consumer group is created at the start of the stream (ID `0`), so messages published before the group existed — including before any consumer ever started — are delivered; the startup probe message is gone. Upgrade note: groups that already exist are untouched; a NEW group name on an existing stream will receive the entries still in it (bounded by `WithStreamMaxLen`; entries older than 3 days are dropped as expired).
 
 If re-queueing a retry to the delay queue fails, the entry is left in the stream. `XDEL` assumes exactly one consumer group per stream; broadcast messages are already dropped in group consumption, so there is no multi-group use.
 
