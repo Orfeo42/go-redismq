@@ -109,9 +109,12 @@ func WithStdLogger(l *log.Logger) Option
 func WithTraceIDFromContext(fn func(ctx context.Context) string) Option
 func WithTraceIDToContext(fn func(ctx context.Context, traceID string) context.Context) Option
 func WithClock(c Clock) Option
+func WithStreamMaxLen(n int64) Option
 ```
 
 A `nil` argument to any `With*` option is ignored — the zero-value default stays in effect instead of panicking or erroring. `Clock` is `interface{ Now() time.Time }`, useful for deterministic tests; the default is the real system clock.
+
+`WithStreamMaxLen` bounds every stream the library writes to: each `XADD` it performs (topic streams, death queue) uses `MAXLEN ~ n`, and the 10-minute trim (`XTRIM MAXLEN`) uses the same `n`. The default is 10000 and a non-positive value is ignored. Since consumed entries are deleted (see [Retries and Stream Memory](#retries-and-stream-memory)), `n` bounds the unconsumed backlog per stream: during a long consumer outage, entries beyond `n` are evicted oldest-first.
 
 ## Context and Graceful Shutdown
 
@@ -188,6 +191,39 @@ Registration now fails loudly instead of logging-and-dropping:
 Sending has its own sentinels: `ErrMessageIDNotBlank` (a message with a pre-set `MessageId` was passed to `Send`), `ErrBlankTag` (a message's `Tag` was blank), `ErrDelayNotSupportedInTransaction` (a delayed message was passed to `SendTransaction`), `ErrUnknownTransactionStatus` (a transaction executer returned a `TransactionStatus` other than `CommitTransaction`/`RollbackTransaction`), and `ErrDeliverTimeInThePast` (a delayed message's computed delivery time is not in the future).
 
 The library does not panic on invalid configuration or invalid input. `Assert`, `AssertError`, `Try`, and `SystemAssertPrefix` were removed entirely, and nothing replaced them by design — every place that used to assert-and-panic now returns an error instead.
+
+## Retries and Stream Memory
+
+The consumer acknowledges and deletes (`XACK` + `XDEL` in one pipeline) a stream entry on every terminal path:
+
+- the listener commits the message
+- a retry was successfully re-queued to the delay queue
+- the message was moved to the death queue
+- the message was dropped because its reconsume limit was reached (see `DropOnReconsumeExhausted` below)
+- no listener is registered for the message
+- the message expired (older than 3 days)
+- a broadcast message was received in group consumption
+
+If re-queueing a retry to the delay queue fails, the entry is left in the stream. `XDEL` assumes exactly one consumer group per stream; broadcast messages are already dropped in group consumption, so there is no multi-group use.
+
+Every 10 minutes the library also trims each topic stream, the backup stream and the death queue with `XTRIM MAXLEN` to the limit set by `WithStreamMaxLen`.
+
+Retry policy: when a listener returns a retry action, the message is redelivered with a linear backoff of 60 seconds times the attempt number. `Message.ReconsumeMax` is honored when greater than 0 (both below and above 40); 0 means the default of 40. When the cap is reached the message goes to the death queue. `ReconsumeMax` is now serialized into the stream metadata, so it survives publish; previously it was silently dropped.
+
+Set `DropOnReconsumeExhausted` to discard a message instead of moving it to the death queue when the cap is reached. The entry is acked and deleted, and a Warn log `redismq: message dropped, reconsume limit reached` is emitted with `reconsume_limit`:
+
+```go
+msg := &redismq.Message{
+    Topic:                    "topic",
+    Tag:                      "tag",
+    ReconsumeMax:             3,
+    DropOnReconsumeExhausted: true,
+}
+
+ok, err := client.Send(ctx, msg)
+```
+
+Migration note: hosts that call `XDEL` themselves inside `Consume` as a workaround for unbounded streams should remove it, the library now deletes consumed entries.
 
 ## Trace ID Propagation
 
@@ -715,7 +751,7 @@ Attribute keys emitted alongside library log events are stable and `snake_case`,
 | `stream`          | Redis stream name backing the topic                                             |
 | `reconsume_times` | Number of times this message has been redelivered                               |
 | `reconsume_max`   | Per-message redelivery cap set by the sender                                    |
-| `reconsume_limit` | Effective redelivery ceiling applied by the consumer (`max(40, reconsume_max)`) |
+| `reconsume_limit` | Effective redelivery ceiling applied by the consumer (`reconsume_max` when > 0, else 40) |
 | `cost_ms`         | Milliseconds between send and consume                                           |
 | `trace_id`        | Trace id read from the message, when present                                    |
 | `cause`           | The root-cause error value                                                      |
@@ -775,6 +811,7 @@ func WithStdLogger(l *log.Logger) Option
 func WithTraceIDFromContext(fn func(ctx context.Context) string) Option
 func WithTraceIDToContext(fn func(ctx context.Context, traceID string) context.Context) Option
 func WithClock(c Clock) Option
+func WithStreamMaxLen(n int64) Option
 
 func NewDefaultLogger() Logger
 ```

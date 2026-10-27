@@ -23,6 +23,7 @@ type Message struct {
 	StartDeliverTime          int64          `dc:"Send Time,0-No Delay, Second" json:"startDeliverTime"`
 	ReconsumeTimes            int            `dc:"Reconsume Count"              json:"reconsumeTimes"`
 	ReconsumeMax              int            `dc:"Reconsume Max Count"          json:"reconsumeMax"`
+	DropOnReconsumeExhausted  bool           `dc:"Drop On Reconsume Exhausted"  json:"dropOnReconsumeExhausted"`
 	CustomData                map[string]any `dc:"CustomData"                   json:"customData"`
 	SendTime                  int64          `dc:"Sent Time"                    json:"sendTime"`
 	ConsumerDelayMilliSeconds int            `dc:"Consumer Delay Milliseconds"  json:"consumerDelayMilliSeconds"`
@@ -32,6 +33,7 @@ type messageMetaData struct {
 	StartDeliverTime          int64          `dc:"Send Time,0-No Delay, Second" json:"startDeliverTime"`
 	ReconsumeTimes            int            `dc:"Reconsume Count"              json:"reconsumeTimes"`
 	ReconsumeMax              int            `dc:"Reconsume Max Count"          json:"reconsumeMax"`
+	DropOnReconsumeExhausted  bool           `dc:"Drop On Reconsume Exhausted"  json:"dropOnReconsumeExhausted"`
 	CustomData                map[string]any `dc:"CustomData"                   json:"customData"`
 	Key                       string         `dc:"Key"                          json:"key"`
 	SendTime                  int64          `dc:"SendTime"                     json:"sendTime"`
@@ -42,6 +44,7 @@ type streamMetadata struct {
 	StartDeliverTime          int64          `json:"startDeliverTime"`
 	ReconsumeTimes            int            `json:"reconsumeTimes"`
 	ReconsumeMax              int            `json:"reconsumeMax"`
+	DropOnReconsumeExhausted  bool           `json:"dropOnReconsumeExhausted"`
 	CustomData                map[string]any `json:"customData"`
 	Key                       string         `json:"key"`
 	SendTime                  int64          `json:"sendTime"`
@@ -89,7 +92,7 @@ func (message *Message) IsBroadcastingMessage() bool {
 	return value == "BROADCASTING"
 }
 
-func (message *Message) ToStreamAddArgsValues(stream string) (*redis.XAddArgs, error) {
+func (message *Message) ToStreamAddArgsValues(stream string, maxLen int64) (*redis.XAddArgs, error) {
 	if message.ConsumerDelayMilliSeconds == 0 {
 		message.ConsumerDelayMilliSeconds = DefaultConsumerDelayMilliSeconds
 	}
@@ -97,6 +100,8 @@ func (message *Message) ToStreamAddArgsValues(stream string) (*redis.XAddArgs, e
 	metadata := messageMetaData{
 		StartDeliverTime:          message.StartDeliverTime,
 		ReconsumeTimes:            message.ReconsumeTimes,
+		ReconsumeMax:              message.ReconsumeMax,
+		DropOnReconsumeExhausted:  message.DropOnReconsumeExhausted,
 		CustomData:                message.CustomData,
 		Key:                       message.Key,
 		ConsumerDelayMilliSeconds: message.ConsumerDelayMilliSeconds,
@@ -117,6 +122,8 @@ func (message *Message) ToStreamAddArgsValues(stream string) (*redis.XAddArgs, e
 
 	return &redis.XAddArgs{
 		Stream: stream,
+		MaxLen: maxLen,
+		Approx: true,
 		Values: values,
 	}, nil
 }
@@ -130,6 +137,7 @@ func (message *Message) decodeStreamMetadata(metadata string) error {
 
 	message.ReconsumeTimes = parsed.ReconsumeTimes
 	message.ReconsumeMax = parsed.ReconsumeMax
+	message.DropOnReconsumeExhausted = parsed.DropOnReconsumeExhausted
 	message.StartDeliverTime = parsed.StartDeliverTime
 	message.SendTime = parsed.SendTime
 	message.CustomData = parsed.CustomData

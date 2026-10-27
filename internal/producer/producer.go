@@ -47,14 +47,15 @@ type Producer struct {
 	log          logging.AttrLogger
 	tracer       Tracer
 	clock        Clock
+	streamMaxLen int64
 }
 
-func New(resolveRedis func() (Redis, error), log logging.AttrLogger, tracer Tracer, clock Clock) *Producer {
+func New(resolveRedis func() (Redis, error), log logging.AttrLogger, tracer Tracer, clock Clock, streamMaxLen int64) *Producer {
 	if clock == nil {
 		clock = systemClock{}
 	}
 
-	return &Producer{resolveRedis: resolveRedis, log: log, tracer: tracer, clock: clock}
+	return &Producer{resolveRedis: resolveRedis, log: log, tracer: tracer, clock: clock, streamMaxLen: streamMaxLen}
 }
 
 func (p *Producer) currentTimeMillis() int64 {
@@ -113,7 +114,7 @@ func (p *Producer) sendMessage(ctx context.Context, message *mqtype.Message, sou
 
 	p.tracer.StampTraceID(ctx, message)
 
-	streamAddArgs, err := message.ToStreamAddArgsValues(streamname.Queue(message.Topic))
+	streamAddArgs, err := message.ToStreamAddArgsValues(streamname.Queue(message.Topic), p.streamMaxLen)
 	if err != nil {
 		return false, err
 	}
@@ -217,7 +218,7 @@ func (p *Producer) Commit(ctx context.Context, message *mqtype.Message) (bool, e
 	streamMessageId := ""
 
 	_, err = client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		streamAddArgs, argsErr := message.ToStreamAddArgsValues(streamname.Queue(message.Topic))
+		streamAddArgs, argsErr := message.ToStreamAddArgsValues(streamname.Queue(message.Topic), p.streamMaxLen)
 		if argsErr != nil {
 			return argsErr
 		}

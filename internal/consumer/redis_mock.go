@@ -19,8 +19,8 @@ var _ Redis = &RedisMock{}
 //
 //		// make and configure a mocked Redis
 //		mockedRedis := &RedisMock{
-//			XAckFunc: func(ctx context.Context, stream string, group string, ids ...string) *redis.IntCmd {
-//				panic("mock out the XAck method")
+//			PipelinedFunc: func(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+//				panic("mock out the Pipelined method")
 //			},
 //			XAddFunc: func(ctx context.Context, args *redis.XAddArgs) *redis.StringCmd {
 //				panic("mock out the XAdd method")
@@ -47,8 +47,8 @@ var _ Redis = &RedisMock{}
 //
 //	}
 type RedisMock struct {
-	// XAckFunc mocks the XAck method.
-	XAckFunc func(ctx context.Context, stream string, group string, ids ...string) *redis.IntCmd
+	// PipelinedFunc mocks the Pipelined method.
+	PipelinedFunc func(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error)
 
 	// XAddFunc mocks the XAdd method.
 	XAddFunc func(ctx context.Context, args *redis.XAddArgs) *redis.StringCmd
@@ -70,16 +70,12 @@ type RedisMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// XAck holds details about calls to the XAck method.
-		XAck []struct {
+		// Pipelined holds details about calls to the Pipelined method.
+		Pipelined []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
-			// Stream is the stream argument value.
-			Stream string
-			// Group is the group argument value.
-			Group string
-			// Ids is the ids argument value.
-			Ids []string
+			// Fn is the fn argument value.
+			Fn func(redis.Pipeliner) error
 		}
 		// XAdd holds details about calls to the XAdd method.
 		XAdd []struct {
@@ -134,7 +130,7 @@ type RedisMock struct {
 			MaxLen int64
 		}
 	}
-	lockXAck                 sync.RWMutex
+	lockPipelined            sync.RWMutex
 	lockXAdd                 sync.RWMutex
 	lockXGroupCreateConsumer sync.RWMutex
 	lockXGroupCreateMkStream sync.RWMutex
@@ -143,47 +139,39 @@ type RedisMock struct {
 	lockXTrimMaxLen          sync.RWMutex
 }
 
-// XAck calls XAckFunc.
-func (mock *RedisMock) XAck(ctx context.Context, stream string, group string, ids ...string) *redis.IntCmd {
-	if mock.XAckFunc == nil {
-		panic("RedisMock.XAckFunc: method is nil but Redis.XAck was just called")
+// Pipelined calls PipelinedFunc.
+func (mock *RedisMock) Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+	if mock.PipelinedFunc == nil {
+		panic("RedisMock.PipelinedFunc: method is nil but Redis.Pipelined was just called")
 	}
 	callInfo := struct {
-		Ctx    context.Context
-		Stream string
-		Group  string
-		Ids    []string
+		Ctx context.Context
+		Fn  func(redis.Pipeliner) error
 	}{
-		Ctx:    ctx,
-		Stream: stream,
-		Group:  group,
-		Ids:    ids,
+		Ctx: ctx,
+		Fn:  fn,
 	}
-	mock.lockXAck.Lock()
-	mock.calls.XAck = append(mock.calls.XAck, callInfo)
-	mock.lockXAck.Unlock()
-	return mock.XAckFunc(ctx, stream, group, ids...)
+	mock.lockPipelined.Lock()
+	mock.calls.Pipelined = append(mock.calls.Pipelined, callInfo)
+	mock.lockPipelined.Unlock()
+	return mock.PipelinedFunc(ctx, fn)
 }
 
-// XAckCalls gets all the calls that were made to XAck.
+// PipelinedCalls gets all the calls that were made to Pipelined.
 // Check the length with:
 //
-//	len(mockedRedis.XAckCalls())
-func (mock *RedisMock) XAckCalls() []struct {
-	Ctx    context.Context
-	Stream string
-	Group  string
-	Ids    []string
+//	len(mockedRedis.PipelinedCalls())
+func (mock *RedisMock) PipelinedCalls() []struct {
+	Ctx context.Context
+	Fn  func(redis.Pipeliner) error
 } {
 	var calls []struct {
-		Ctx    context.Context
-		Stream string
-		Group  string
-		Ids    []string
+		Ctx context.Context
+		Fn  func(redis.Pipeliner) error
 	}
-	mock.lockXAck.RLock()
-	calls = mock.calls.XAck
-	mock.lockXAck.RUnlock()
+	mock.lockPipelined.RLock()
+	calls = mock.calls.Pipelined
+	mock.lockPipelined.RUnlock()
 	return calls
 }
 

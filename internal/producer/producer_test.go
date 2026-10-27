@@ -113,7 +113,7 @@ func newTestProducer(t *testing.T, redisClient Redis) (*Producer, *captureHandle
 	log, handler := newTestAttrLogger()
 	tracer := &stubTracer{}
 
-	p := New(func() (Redis, error) { return redisClient, nil }, log, tracer, fixedClock{now: time.Unix(1000, 0)})
+	p := New(func() (Redis, error) { return redisClient, nil }, log, tracer, fixedClock{now: time.Unix(1000, 0)}, 10000)
 
 	return p, handler, tracer
 }
@@ -185,6 +185,30 @@ func TestPublish(t *testing.T) {
 		require.Len(t, tracer.stamped, 1)
 	})
 
+	t.Run("publish bounds the stream with approximate MaxLen", func(t *testing.T) {
+		var captured *redis.XAddArgs
+
+		mockRedis := &RedisMock{
+			XAddFunc: func(_ context.Context, args *redis.XAddArgs) *redis.StringCmd {
+				captured = args
+				cmd := redis.NewStringCmd(context.Background())
+				cmd.SetVal("42-0")
+
+				return cmd
+			},
+		}
+
+		p, _, _ := newTestProducer(t, mockRedis)
+
+		sent, err := p.Publish(context.Background(), &mqtype.Message{Topic: "t", Tag: "tag1"})
+
+		require.NoError(t, err)
+		require.True(t, sent)
+		require.NotNil(t, captured)
+		require.Equal(t, int64(10000), captured.MaxLen)
+		require.True(t, captured.Approx)
+	})
+
 	t.Run("XAdd failure is propagated", func(t *testing.T) {
 		wantErr := errors.New("boom")
 
@@ -209,7 +233,7 @@ func TestPublish(t *testing.T) {
 		wantErr := errors.New("no redis")
 
 		log, _ := newTestAttrLogger()
-		p := New(func() (Redis, error) { return nil, wantErr }, log, &stubTracer{}, nil)
+		p := New(func() (Redis, error) { return nil, wantErr }, log, &stubTracer{}, nil, 10000)
 
 		sent, err := p.Publish(context.Background(), &mqtype.Message{Topic: "t", Tag: "tag1"})
 
@@ -264,6 +288,37 @@ func TestSendTransaction(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, sent)
 		require.Equal(t, "7-0", message.MessageId)
+	})
+
+	t.Run("commit bounds the stream with approximate MaxLen", func(t *testing.T) {
+		pipe := &fakePipeliner{}
+
+		var captured *redis.XAddArgs
+
+		mockRedis := &RedisMock{
+			TxPipelinedFunc: func(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+				return nil, fn(pipe)
+			},
+			XAddFunc: func(_ context.Context, args *redis.XAddArgs) *redis.StringCmd {
+				captured = args
+				cmd := redis.NewStringCmd(context.Background())
+				cmd.SetVal("7-0")
+
+				return cmd
+			},
+		}
+
+		p, _, _ := newTestProducer(t, mockRedis)
+
+		sent, err := p.SendTransaction(context.Background(), &mqtype.Message{Topic: "t", Tag: "tag1"}, func(_ *mqtype.Message) (mqtype.TransactionStatus, error) {
+			return mqtype.CommitTransaction, nil
+		})
+
+		require.NoError(t, err)
+		require.True(t, sent)
+		require.NotNil(t, captured)
+		require.Equal(t, int64(10000), captured.MaxLen)
+		require.True(t, captured.Approx)
 	})
 
 	t.Run("rollback status deletes the prepared message", func(t *testing.T) {

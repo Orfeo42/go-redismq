@@ -96,6 +96,7 @@ func TestTryCreateGroup(t *testing.T) {
 			func() string { return "GID_Test" },
 			nil,
 			nil,
+			int64(10000),
 		)
 
 		require.NotPanics(t, func() {
@@ -170,6 +171,7 @@ func TestBlockConsumerTopicStartsTransactionChecker(t *testing.T) {
 			func() string { return "GID_Test" },
 			nil,
 			nil,
+			int64(10000),
 		)
 
 		ctx, cancel := context.WithCancel(context.Background())

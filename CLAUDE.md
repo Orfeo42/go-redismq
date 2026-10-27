@@ -16,7 +16,7 @@ Redis Streams-backed message queue library. Go 1.25, module `github.com/Orfeo42/
 
 ## Architecture
 
-- Root package `redismq` is a façade: 7 files, 463 lines total (`doc.go` 39, `types.go` 43, `errors.go` 45, `client.go` 173, `options.go` 87, `logger.go` 56, `config.go` 20). Declarations only — type aliases, option constructors, the `Client` struct that wires dependencies in `New()`, and thin delegating methods. No business logic lives at root; every method on `*Client` (`Send`, `SendTransaction`, `SendDelay`, `Invoke`, `RegisterInvoke`, `RegisterListener`, `RegisterChecker`) is a one-line delegation into an `internal/` engine.
+- Root package `redismq` is a façade: 7 files, 476 lines total (`doc.go` 39, `types.go` 43, `errors.go` 45, `client.go` 173, `options.go` 100, `logger.go` 56, `config.go` 20). Declarations only — type aliases, option constructors, the `Client` struct that wires dependencies in `New()`, and thin delegating methods. No business logic lives at root; every method on `*Client` (`Send`, `SendTransaction`, `SendDelay`, `Invoke`, `RegisterInvoke`, `RegisterListener`, `RegisterChecker`) is a one-line delegation into an `internal/` engine.
 - All logic lives under `internal/`, in an acyclic layered graph:
   - **Layer 0** (no imports of any other internal package): `mqtype` (core types: `Message`, `Action`, `TransactionStatus`, `MQTopicEnum`, listener/checker interfaces), `logging` (the `Logger`/`AttrLogger` adapter framework), `logattr` (imports `mqtype` + `streamname`; shared `slog.Attr` builders), `streamname` (stream/queue key naming), `idgen` (ID generation), `jsonutil` (JSON marshal helpers).
   - **Layer 1**: `traceio` (imports `mqtype`; trace-ID stamping/extraction), `registry` (imports `logging`, `mqtype`, `streamname`; listener/checker registration and lookup). Neither is imported by any Layer 2 engine directly — root wires concrete Layer 1 instances into Layer 2 engines through each engine's own narrow interface (see next point).
@@ -83,7 +83,7 @@ Four `testing.T` checks over every non-generated, non-`_test.go` `.go` file unde
 - Pre-existing discarded errors, left deliberately (not test-coverage gaps, don't "fix" them as drive-by cleanup):
   - `internal/txchecker/txchecker.go:119` and `:127` — `_, _ = c.completer.Rollback(...)` / `Commit(...)` results discarded.
   - `internal/txchecker/txchecker.go:158` — `value, _ := client.Get(ctx, messageId).Result()`.
-  - `internal/consumer/consumer.go:244` — `groups, _ := client.XInfoGroups(ctx, queueName).Result()`.
-  - `internal/producer/producer.go:225` — `streamMessageId, _ = client.XAdd(ctx, streamAddArgs).Result()` inside a `TxPipelined` closure.
+  - `internal/consumer/consumer.go:247` — `groups, _ := client.XInfoGroups(ctx, queueName).Result()`.
+  - `internal/producer/producer.go:226` — `streamMessageId, _ = client.XAdd(ctx, streamAddArgs).Result()` inside a `TxPipelined` closure.
   - `internal/logging/logging.go:75` — `f, _ := fs.Next()`.
-- `Message.ReconsumeMax` (`internal/mqtype/message.go:25`) is never written into the serialized stream metadata: `ToStreamAddArgsValues` (message.go:92-122) builds a `messageMetaData` struct (message.go:31-39) that has a `ReconsumeMax` field but never assigns `message.ReconsumeMax` into it before marshaling. So a message's `ReconsumeMax` does not survive a publish→broker→consume round trip; it only has effect within the same process before publish (see `internal/consumer/dispatch.go:180`, `resumeTimesMax := max(40, message.ReconsumeMax)`).
+- `messageAck` (`internal/consumer/dispatch.go`) runs `XACK` + `XDEL` in one pipeline on every terminal path, so a consumed entry is gone from the stream for every group. This is only correct while each stream has exactly one consumer group; introducing a second group (e.g. real broadcast support) requires removing the `XDEL` first, or the other group silently loses messages.

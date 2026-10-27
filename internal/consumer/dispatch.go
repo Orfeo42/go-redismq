@@ -5,9 +5,16 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/Orfeo42/go-redismq/v3/internal/logattr"
 	"github.com/Orfeo42/go-redismq/v3/internal/mqtype"
 	"github.com/Orfeo42/go-redismq/v3/internal/streamname"
+)
+
+const (
+	defaultReconsumeMax = 40
+	trimInterval        = 10 * time.Minute
 )
 
 func (c *Consumer) dispatchConsumerMessage(ctx context.Context, message *mqtype.Message) {
@@ -59,8 +66,8 @@ func (c *Consumer) runConsumeMessage(ctx context.Context, listener mqtype.IMessa
 	}()
 
 	if message.IsBroadcastingMessage() {
-		// todo mark it's a bug
 		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: broadcast message received by group consumer, dropped", logattr.MessageAttrs(message)...)
+		c.messageAck(ctx, message)
 
 		return
 	}
@@ -69,6 +76,7 @@ func (c *Consumer) runConsumeMessage(ctx context.Context, listener mqtype.IMessa
 	if expired {
 		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: message expired, dropped",
 			append(logattr.MessageAttrs(message), slog.Int64("age_ms", cost))...)
+		c.messageAck(ctx, message)
 
 		return
 	}
@@ -165,7 +173,14 @@ func (c *Consumer) messageAck(ctx context.Context, message *mqtype.Message) {
 
 	streamName := streamname.Queue(message.Topic)
 
-	ackResult, err := client.XAck(ctx, streamName, c.group(), message.MessageId).Result()
+	var ackCmd, delCmd *redis.IntCmd
+
+	_, err = client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		ackCmd = pipe.XAck(ctx, streamName, c.group(), message.MessageId)
+		delCmd = pipe.XDel(ctx, streamName, message.MessageId)
+
+		return nil
+	})
 	if err != nil {
 		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: message ack failed", append(logattr.MessageAttrs(message), logattr.CauseAttr(err))...)
 
@@ -173,16 +188,28 @@ func (c *Consumer) messageAck(ctx context.Context, message *mqtype.Message) {
 	}
 
 	c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: message acked",
-		slog.String("message_id", message.MessageId), slog.String("stream", streamName), slog.Int64("ack_result", ackResult))
+		slog.String("message_id", message.MessageId), slog.String("stream", streamName),
+		slog.Int64("ack_result", ackCmd.Val()), slog.Int64("deleted", delCmd.Val()))
 }
 
 func (c *Consumer) pushTaskToResumeLater(ctx context.Context, message *mqtype.Message) bool {
-	resumeTimesMax := max(40, message.ReconsumeMax)
+	resumeTimesMax := defaultReconsumeMax
+	if message.ReconsumeMax > 0 {
+		resumeTimesMax = message.ReconsumeMax
+	}
+
 	c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: message pushed to resume later",
 		append(logattr.MessageAttrs(message), slog.Int("reconsume_limit", resumeTimesMax))...)
 
 	if message.ReconsumeTimes >= resumeTimesMax {
-		return c.putMessageToDeathQueue(ctx, message)
+		if !message.DropOnReconsumeExhausted {
+			return c.putMessageToDeathQueue(ctx, message)
+		}
+
+		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: message dropped, reconsume limit reached",
+			append(logattr.MessageAttrs(message), slog.Int("reconsume_limit", resumeTimesMax))...)
+
+		return true
 	}
 
 	message.ReconsumeTimes++
@@ -207,7 +234,7 @@ func (c *Consumer) putMessageToDeathQueue(ctx context.Context, message *mqtype.M
 		return false
 	}
 
-	streamAddArgs, err := message.ToStreamAddArgsValues(streamname.DeathQueue())
+	streamAddArgs, err := message.ToStreamAddArgsValues(streamname.DeathQueue(), c.streamMaxLen)
 	if err != nil {
 		c.log.LogAttrs(ctx, slog.LevelError, "redismq: death queue message marshal failed", append(logattr.MessageAttrs(message), logattr.CauseAttr(err))...)
 
@@ -248,15 +275,13 @@ func (c *Consumer) startScheduleTrimStream(ctx context.Context) {
 				c.log.LogAttrs(ctx, slog.LevelInfo, "redismq: trim stream scheduler stopped, context cancelled")
 
 				return
-			case <-time.After(1000 * 60 * 10 * time.Second):
+			case <-time.After(trimInterval):
 			}
 		}
 	}()
 }
 
 func (c *Consumer) startScheduleTrimStreamIteration(ctx context.Context, client Redis) {
-	const maxLen = 10000
-
 	defer func() {
 		if exception := recover(); exception != nil {
 			err := logattr.PanicError(exception)
@@ -269,11 +294,11 @@ func (c *Consumer) startScheduleTrimStreamIteration(ctx context.Context, client 
 
 	for _, topic := range c.registry.GetTopics() {
 		queueName := streamname.Queue(topic)
-		client.XTrimMaxLen(ctx, queueName, int64(maxLen))
+		client.XTrimMaxLen(ctx, queueName, c.streamMaxLen)
 		queueName = streamname.BackupQueue(topic)
-		client.XTrimMaxLen(ctx, queueName, int64(maxLen))
+		client.XTrimMaxLen(ctx, queueName, c.streamMaxLen)
 	}
 
 	queueName := streamname.DeathQueue()
-	client.XTrimMaxLen(ctx, queueName, int64(maxLen))
+	client.XTrimMaxLen(ctx, queueName, c.streamMaxLen)
 }

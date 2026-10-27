@@ -18,10 +18,13 @@ type settings struct {
 	traceIDFromContext func(ctx context.Context) string
 	traceIDToContext   func(ctx context.Context, traceID string) context.Context
 	clock              Clock
+	streamMaxLen       int64
 }
 
+const defaultStreamMaxLen = 10000
+
 func newSettings() *settings {
-	return &settings{}
+	return &settings{streamMaxLen: defaultStreamMaxLen}
 }
 
 type Option func(*settings)
@@ -83,5 +86,15 @@ func WithClock(c Clock) Option {
 		}
 
 		s.clock = c
+	}
+}
+
+func WithStreamMaxLen(n int64) Option {
+	return func(s *settings) {
+		if n <= 0 {
+			return
+		}
+
+		s.streamMaxLen = n
 	}
 }

@@ -59,7 +59,7 @@ func New(cfg RedisMqConfig, opts ...Option) (*Client, error) {
 
 	prod := producer.New(
 		func() (producer.Redis, error) { return redisClient, nil },
-		logAttr, tracer, s.clock,
+		logAttr, tracer, s.clock, s.streamMaxLen,
 	)
 
 	c := &Client{
@@ -86,7 +86,7 @@ func New(cfg RedisMqConfig, opts ...Option) (*Client, error) {
 
 	c.consumer = consumer.New(
 		func() (consumer.Redis, error) { return redisClient, nil },
-		logAttr, reg, c.delayQueue, txCheck, tracer, group, s.clock, &c.wg,
+		logAttr, reg, c.delayQueue, txCheck, tracer, group, s.clock, &c.wg, s.streamMaxLen,
 	)
 
 	return c, nil

@@ -135,3 +135,30 @@ func TestNewDefaultLogger(t *testing.T) {
 		require.NotNil(t, logger)
 	})
 }
+
+func TestWithStreamMaxLenOption(t *testing.T) {
+	t.Run("default is 10000", func(t *testing.T) {
+		require.Equal(t, int64(10000), newSettings().streamMaxLen)
+	})
+
+	t.Run("positive value is applied", func(t *testing.T) {
+		s := newSettings()
+		WithStreamMaxLen(500)(s)
+
+		require.Equal(t, int64(500), s.streamMaxLen)
+	})
+
+	t.Run("zero is ignored", func(t *testing.T) {
+		s := newSettings()
+		WithStreamMaxLen(0)(s)
+
+		require.Equal(t, int64(10000), s.streamMaxLen)
+	})
+
+	t.Run("negative is ignored", func(t *testing.T) {
+		s := newSettings()
+		WithStreamMaxLen(-5)(s)
+
+		require.Equal(t, int64(10000), s.streamMaxLen)
+	})
+}

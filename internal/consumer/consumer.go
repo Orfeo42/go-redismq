@@ -25,7 +25,7 @@ type Redis interface {
 	XGroupCreateMkStream(ctx context.Context, stream, group, start string) *redis.StatusCmd
 	XGroupCreateConsumer(ctx context.Context, stream, group, consumer string) *redis.IntCmd
 	XReadGroup(ctx context.Context, a *redis.XReadGroupArgs) *redis.XStreamSliceCmd
-	XAck(ctx context.Context, stream, group string, ids ...string) *redis.IntCmd
+	Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error)
 	XTrimMaxLen(ctx context.Context, key string, maxLen int64) *redis.IntCmd
 }
 
@@ -71,6 +71,7 @@ type Consumer struct {
 	group        func() string
 	clock        Clock
 	wg           *sync.WaitGroup
+	streamMaxLen int64
 
 	nameMu sync.RWMutex
 	name   string
@@ -86,6 +87,7 @@ func New(
 	group func() string,
 	clock Clock,
 	wg *sync.WaitGroup,
+	streamMaxLen int64,
 ) *Consumer {
 	if clock == nil {
 		clock = systemClock{}
@@ -105,6 +107,7 @@ func New(
 		group:        group,
 		clock:        clock,
 		wg:           wg,
+		streamMaxLen: streamMaxLen,
 	}
 }
 
@@ -225,7 +228,7 @@ func (c *Consumer) tryCreateGroup(ctx context.Context, queueName string, topic s
 
 	grp := c.group()
 
-	streamAddArgs, err := message.ToStreamAddArgsValues(queueName)
+	streamAddArgs, err := message.ToStreamAddArgsValues(queueName, c.streamMaxLen)
 	if err != nil {
 		c.log.LogAttrs(ctx, slog.LevelWarn, "redismq: group setup probe message marshal failed",
 			slog.String("stream", queueName), slog.String("consumer_group", grp), slog.String("topic", topic), logattr.CauseAttr(err))

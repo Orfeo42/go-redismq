@@ -1,6 +1,7 @@
 package mqtype
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -13,12 +14,14 @@ func TestPassStreamMessage(t *testing.T) {
 			Key:                       "key1",
 			StartDeliverTime:          1234,
 			ReconsumeTimes:            2,
+			ReconsumeMax:              7,
+			DropOnReconsumeExhausted:  true,
 			CustomData:                map[string]any{"foo": "bar"},
 			ConsumerDelayMilliSeconds: 3000,
 		}
 		original.SetTraceID("trace-xyz")
 
-		args, err := original.ToStreamAddArgsValues("stream1")
+		args, err := original.ToStreamAddArgsValues("stream1", 0)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -56,6 +59,14 @@ func TestPassStreamMessage(t *testing.T) {
 
 		if fresh.ReconsumeTimes != original.ReconsumeTimes {
 			t.Fatalf("expected reconsumeTimes %d, got %d", original.ReconsumeTimes, fresh.ReconsumeTimes)
+		}
+
+		if fresh.ReconsumeMax != original.ReconsumeMax {
+			t.Fatalf("expected reconsumeMax %d, got %d", original.ReconsumeMax, fresh.ReconsumeMax)
+		}
+
+		if fresh.DropOnReconsumeExhausted != original.DropOnReconsumeExhausted {
+			t.Fatalf("expected dropOnReconsumeExhausted %t, got %t", original.DropOnReconsumeExhausted, fresh.DropOnReconsumeExhausted)
 		}
 
 		if fresh.ConsumerDelayMilliSeconds != original.ConsumerDelayMilliSeconds {
@@ -139,6 +150,75 @@ func TestPassStreamMessage(t *testing.T) {
 
 		if message.ConsumerDelayMilliSeconds != 111 {
 			t.Fatalf("expected consumerDelayMilliSeconds to remain %d, got %d", 111, message.ConsumerDelayMilliSeconds)
+		}
+	})
+}
+
+func TestToStreamAddArgsValues(t *testing.T) {
+	t.Run("positive maxLen sets approximate MaxLen", func(t *testing.T) {
+		message := &Message{Topic: "t"}
+
+		args, err := message.ToStreamAddArgsValues("stream1", 500)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if args.MaxLen != 500 {
+			t.Fatalf("expected MaxLen %d, got %d", 500, args.MaxLen)
+		}
+
+		if !args.Approx {
+			t.Fatal("expected Approx to be true")
+		}
+
+		if args.Stream != "stream1" {
+			t.Fatalf("expected stream %q, got %q", "stream1", args.Stream)
+		}
+	})
+
+	t.Run("zero maxLen leaves MaxLen unset", func(t *testing.T) {
+		message := &Message{Topic: "t"}
+
+		args, err := message.ToStreamAddArgsValues("stream1", 0)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if args.MaxLen != 0 {
+			t.Fatalf("expected MaxLen %d, got %d", 0, args.MaxLen)
+		}
+	})
+
+	t.Run("metadata carries ReconsumeMax and DropOnReconsumeExhausted", func(t *testing.T) {
+		message := &Message{Topic: "t", ReconsumeMax: 7, DropOnReconsumeExhausted: true}
+
+		args, err := message.ToStreamAddArgsValues("stream1", 0)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		values, ok := args.Values.(map[string]any)
+		if !ok {
+			t.Fatalf("expected args.Values to be map[string]any, got %T", args.Values)
+		}
+
+		raw, ok := values["metadata"].(string)
+		if !ok {
+			t.Fatalf("expected metadata to be string, got %T", values["metadata"])
+		}
+
+		var decoded map[string]any
+
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if decoded["reconsumeMax"] != float64(7) {
+			t.Fatalf("expected reconsumeMax %v, got %v", 7, decoded["reconsumeMax"])
+		}
+
+		if decoded["dropOnReconsumeExhausted"] != true {
+			t.Fatalf("expected dropOnReconsumeExhausted true, got %v", decoded["dropOnReconsumeExhausted"])
 		}
 	})
 }
